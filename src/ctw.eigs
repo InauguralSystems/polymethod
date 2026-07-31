@@ -1,0 +1,414 @@
+# ============================================================
+# ctw.eigs — the Chen–Tal–Wang toolbox, per stage (rung 7)
+# ============================================================
+#
+# Implements the distinctive objects of Chen–Tal–Wang, "Super-quadratic
+# Lower Bounds for Depth-2 Linear Threshold Circuits" (ECCC TR26-039 /
+# STOC 2026), read from the primary source, at toy scale with per-input
+# oracles. The full CAPP assembly (Theorem 1.2) is a composition of
+# these stages with machinery this repo already carries (rung 2's
+# split-and-list, rung 4's F2 engine, rung 6's amplifier — CTW Lemma
+# 3.12 IS the BT91 amplifier of rung 6).
+#
+# Stage A — Lemma 3.4, the structure chain (all exact, promises checked):
+#   A2. THR ⊆ DOR∘ETHR            [HP10, CW19]
+#   A3. ETHR ⊆ GapAND∘SYM (mod primes)  [CW19]
+#   A1. AND∘ETHR ⊆ ETHR (base-B packing)  [HP10]
+# Stage C — Lemma 3.9 (folklore): THR-#SAT in 2^(n/2)·poly time by
+#   meet-in-the-middle (the subroutine inside CTW's Theorem 4.5).
+#
+# THR gate = {w: [w_1..w_n], t}: outputs [ Σ w_i x_i >= t ].
+# ETHR gate = {w, v}: outputs [ Σ w_i x_i == v ].
+# Composition-free: callers load "lib/int_vector.eigs" first.
+
+define ctw_lcg(st) as:
+    st.s is (st.s * 48271) % 2147483647
+    return st.s
+
+define gen_thr_gate(n, wmax, seed) as:
+    local st is {"s": seed}
+    if st.s <= 0:
+        st.s is 1
+    local w is []
+    local i is 0
+    loop while i < n:
+        append of [w, ((ctw_lcg of st) % (2 * wmax + 1)) - wmax]
+        i is i + 1
+    local lo is 0
+    local hi is 0
+    i is 0
+    loop while i < n:
+        if w[i] > 0:
+            hi is hi + w[i]
+        else:
+            lo is lo + w[i]
+        i is i + 1
+    local t is lo + ((ctw_lcg of st) % (hi - lo + 1))
+    return {"w": w, "t": t}
+
+define wsum(w, bits) as:
+    local s is 0
+    local i is 0
+    loop while i < (len of w):
+        s is s + (w[i] * (bit_and of [bit_shr of [bits, i], 1]))
+        i is i + 1
+    return s
+
+define thr_eval(g, bits) as:
+    local rv is 0
+    if (wsum of [g.w, bits]) >= g.t:
+        rv is 1
+    return rv
+
+# ---- A2: THR -> DOR of ETHR ----
+# The ETHR list has one gate per ACHIEVABLE value v >= t (achievable-value
+# set computed by subset-sum DP over the weights). The DOR promise — at
+# most one ETHR fires on any input — holds because Σwx has one value.
+# Returns {values: [...], width}.
+define thr_to_dor_ethr(g) as:
+    local n is len of g.w
+    local lo is 0
+    local hi is 0
+    local i is 0
+    loop while i < n:
+        if g.w[i] > 0:
+            hi is hi + g.w[i]
+        else:
+            lo is lo + g.w[i]
+        i is i + 1
+    local span is hi - lo + 1
+    local reach is int_vector_new of span
+    reach[0 - lo] is 1
+    i is 0
+    loop while i < n:
+        local nxt is int_vector_new of span
+        local v is 0
+        loop while v < span:
+            if reach[v] == 1:
+                nxt[v] is 1
+                local v2 is v + g.w[i]
+                if v2 >= 0 and v2 < span:
+                    nxt[v2] is 1
+            v is v + 1
+        reach is nxt
+        i is i + 1
+    local values is []
+    local v is g.t - lo
+    if v < 0:
+        v is 0
+    loop while v < span:
+        if reach[v] == 1:
+            append of [values, v + lo]
+        v is v + 1
+    return {"values": values, "width": len of values}
+
+# evaluate the DOR∘ETHR: returns [output, fired_count] (promise check)
+define dor_ethr_eval(g, dor, bits) as:
+    local s is wsum of [g.w, bits]
+    local fired is 0
+    local i is 0
+    loop while i < (len of dor.values):
+        if s == dor.values[i]:
+            fired is fired + 1
+        i is i + 1
+    local out is 0
+    if fired > 0:
+        out is 1
+    return [out, fired]
+
+# ---- A3: ETHR -> GapAND of SYM (residues mod the first r odd primes) ----
+# [Σwx == v] as AND over primes p of [Σwx ≡ v mod p]. If equal, all fire;
+# if not, only primes dividing (Σwx − v) fire — few, because |Σwx − v| is
+# bounded. Returns the prime list; the promise gap is MEASURED by the
+# caller (max firing fraction over inputs with Σwx != v).
+define first_odd_primes(r) as:
+    local primes is []
+    local cand is 3
+    loop while (len of primes) < r:
+        local ok is 1
+        local d is 3
+        loop while d * d <= cand:
+            if (cand % d) == 0:
+                ok is 0
+                d is cand
+            d is d + 2
+        if ok == 1:
+            append of [primes, cand]
+        cand is cand + 2
+    return primes
+
+# evaluate the GapAND∘SYM: returns [output, fired_count]
+define gapand_sym_eval(w, v, primes, bits) as:
+    local s is wsum of [w, bits]
+    local fired is 0
+    local i is 0
+    loop while i < (len of primes):
+        local p is primes[i]
+        if ((((s - v) % p) + p) % p) == 0:
+            fired is fired + 1
+        i is i + 1
+    local out is 0
+    if fired == (len of primes):
+        out is 1
+    return [out, fired]
+
+# ---- A1: AND of ETHRs -> one ETHR (base-B weight packing) ----
+# Given ETHR gates {w_i, v_i}, pick B > 2·max_i max_x |Σ w_i x − v_i| and
+# combine: Σ_i B^(i-1)·(Σ_j w_ij x_j − v_i) == 0. Returns the packed
+# {w, v, B, max_weight} — coefficient growth is the measured axis.
+define and_ethr_to_ethr(gates) as:
+    local n is len of gates[0].w
+    local maxdev is 1
+    local a is 0
+    loop while a < (len of gates):
+        local g is gates[a]
+        local hi is 0
+        local lo is 0
+        local i is 0
+        loop while i < n:
+            if g.w[i] > 0:
+                hi is hi + g.w[i]
+            else:
+                lo is lo + g.w[i]
+            i is i + 1
+        local d1 is hi - g.v
+        local d2 is g.v - lo
+        if d1 > maxdev:
+            maxdev is d1
+        if d2 > maxdev:
+            maxdev is d2
+        a is a + 1
+    local B is 2 * maxdev + 1
+    local w is []
+    local i is 0
+    loop while i < n:
+        append of [w, 0]
+        i is i + 1
+    local v is 0
+    local scale is 1
+    local maxw is 0
+    a is 0
+    loop while a < (len of gates):
+        i is 0
+        loop while i < n:
+            w[i] is w[i] + (scale * gates[a].w[i])
+            local aw is w[i]
+            if aw < 0:
+                aw is 0 - aw
+            if aw > maxw:
+                maxw is aw
+            i is i + 1
+        v is v + (scale * gates[a].v)
+        scale is scale * B
+        a is a + 1
+    return {"w": w, "v": v, "B": B, "max_weight": maxw}
+
+define ethr_eval(w, v, bits) as:
+    local rv is 0
+    if (wsum of [w, bits]) == v:
+        rv is 1
+    return rv
+
+# ---- C: Lemma 3.9 — THR-#SAT by meet-in-the-middle, 2^(n/2)·poly ----
+# Split vars into halves, enumerate partial weighted sums, sort the right
+# side, count pairs with l + r >= t by a descending two-pointer.
+define thr_count_mim(g) as:
+    local n is len of g.w
+    local nl is floor of (n / 2)
+    local nr is n - nl
+    local L is []
+    local x is 0
+    unobserved:
+        loop while x < (bit_shl of [1, nl]):
+            local s is 0
+            local i is 0
+            loop while i < nl:
+                s is s + (g.w[i] * (bit_and of [bit_shr of [x, i], 1]))
+                i is i + 1
+            append of [L, s]
+            x is x + 1
+        local R is []
+        x is 0
+        loop while x < (bit_shl of [1, nr]):
+            local s is 0
+            local i is 0
+            loop while i < nr:
+                s is s + (g.w[nl + i] * (bit_and of [bit_shr of [x, i], 1]))
+                i is i + 1
+            append of [R, s]
+            x is x + 1
+    sort of L
+    sort of R
+    # for L ascending, the count of r in R with r >= t - l is monotone
+    # nondecreasing; sweep l ascending with a pointer descending over R.
+    local cnt is 0
+    local ptr is len of R
+    local li is 0
+    unobserved:
+        loop while li < (len of L):
+            local need is g.t - L[li]
+            loop while ptr > 0 and R[ptr - 1] >= need:
+                ptr is ptr - 1
+            cnt is cnt + ((len of R) - ptr)
+            li is li + 1
+    return cnt
+
+define thr_count_brute(g) as:
+    local n is len of g.w
+    local size is bit_shl of [1, n]
+    local cnt is 0
+    local x is 0
+    unobserved:
+        loop while x < size:
+            cnt is cnt + (thr_eval of [g, x])
+            x is x + 1
+    return cnt
+
+# ============================================================
+# Stage B — the AW15/CTW 1hotSUM F2-probabilistic polynomial
+# ============================================================
+# One recursion level of the construction CTW §2.3 reviews from [AW15]:
+#   P(m)[s](x) = Σ_t P(m/2)[t](x_K) · E_{s,2t}(Σ x_i)   over F2,
+# with K a seeded half-size sample and E a window interpolation around
+# 2t. The base case P(m/2) is the EXACT 1hotSUM on the sampled
+# coordinates; E_{s,2t} is the exact symmetric indicator gated by the
+# window |s − 2t| <= W. At toy m the asymptotic degree saving of the
+# windowed E (deg ~ sqrt(m)·log m) is vacuous — what this measures is
+# the mechanism's ERROR accounting: the construction fails exactly on
+# the concentration-failure set { x : |Σx − 2·Σx_K| > W }, so the
+# measured error must equal that set's size, seed by seed.
+#
+# Requires src/ac0xor.eigs loaded first (p_add / p_mul, the F2 engine).
+
+# exact F2 indicator [ Σ_{i in vars} x_i == s ]: monomial T included iff
+# C(|T|, s) is odd (Mobius over the subset lattice, symmetric case).
+define sym_ind_f2(vars, s) as:
+    local k is len of vars
+    local C is []
+    local r is 0
+    loop while r <= k:
+        local row is int_vector_new of (k + 1)
+        row[0] is 1
+        local c is 1
+        loop while c <= r:
+            local above is 0
+            if c <= r - 1:
+                above is C[r - 1][c]
+            row[c] is C[r - 1][c - 1] + above
+            c is c + 1
+        append of [C, row]
+        r is r + 1
+    local out is []
+    local sub is 0
+    local nsub is bit_shl of [1, k]
+    loop while sub < nsub:
+        local pc is 0
+        local b is 0
+        loop while b < k:
+            pc is pc + (bit_and of [bit_shr of [sub, b], 1])
+            b is b + 1
+        if pc >= s and ((C[pc][s] % 2) == 1):
+            local mask is 0
+            b is 0
+            loop while b < k:
+                if (bit_and of [bit_shr of [sub, b], 1]) == 1:
+                    mask is bit_or of [mask, bit_shl of [1, vars[b]]]
+                b is b + 1
+            append of [out, mask]
+        sub is sub + 1
+    return out
+
+# build P(m)[s] for all s: returns {polys: [...], K: [...], support: N}
+define onehot_build(px, m, w_window, seed) as:
+    local st is {"s": seed}
+    if st.s <= 0:
+        st.s is 1
+    # sample K: m/2 of the m coordinates, without replacement
+    local pool is []
+    local i is 0
+    loop while i < m:
+        append of [pool, i]
+        i is i + 1
+    local K is []
+    i is 0
+    loop while i < (floor of (m / 2)):
+        local idx is (ctw_lcg of st) % (len of pool)
+        append of [K, pool[idx]]
+        pool[idx] is pool[(len of pool) - 1]
+        list_truncate of [pool, (len of pool) - 1]
+        i is i + 1
+    local all_vars is []
+    i is 0
+    loop while i < m:
+        append of [all_vars, i]
+        i is i + 1
+    # base: exact one-hot on K; full indicators on all vars
+    local half is floor of (m / 2)
+    local base is []
+    local t is 0
+    loop while t <= half:
+        append of [base, sym_ind_f2 of [K, t]]
+        t is t + 1
+    local polys is []
+    local support is 0
+    local s is 0
+    loop while s <= m:
+        local ind is sym_ind_f2 of [all_vars, s]
+        local acc is []
+        t is 0
+        loop while t <= half:
+            local dev is s - (2 * t)
+            if dev < 0:
+                dev is 0 - dev
+            if dev <= w_window:
+                acc is p_add of [px, acc, p_mul of [px, base[t], ind]]
+            t is t + 1
+        append of [polys, acc]
+        support is support + (len of acc)
+        s is s + 1
+    return {"polys": polys, "K": K, "support": support}
+
+# evaluate all coordinates on all 2^m inputs; count inputs whose
+# predicted vector is NOT the true one-hot, and independently count the
+# concentration-failure set — the two MUST be equal.
+define onehot_check(m, built, w_window) as:
+    local size is bit_shl of [1, m]
+    local vecs is []
+    local s is 0
+    loop while s <= m:
+        append of [vecs, ax_eval_all of [m, built.polys[s]]]
+        s is s + 1
+    local errors is 0
+    local conc_fail is 0
+    local x is 0
+    unobserved:
+        loop while x < size:
+            local ones is 0
+            local kones is 0
+            local b is 0
+            loop while b < m:
+                local bit is bit_and of [bit_shr of [x, b], 1]
+                ones is ones + bit
+                b is b + 1
+            b is 0
+            loop while b < (len of built.K):
+                kones is kones + (bit_and of [bit_shr of [x, built.K[b]], 1])
+                b is b + 1
+            local ok is 1
+            s is 0
+            loop while s <= m:
+                local expected is 0
+                if s == ones:
+                    expected is 1
+                if vecs[s][x] != expected:
+                    ok is 0
+                s is s + 1
+            if ok == 0:
+                errors is errors + 1
+            local dev is ones - (2 * kones)
+            if dev < 0:
+                dev is 0 - dev
+            if dev > w_window:
+                conc_fail is conc_fail + 1
+            x is x + 1
+    return {"errors": errors, "conc_fail": conc_fail}

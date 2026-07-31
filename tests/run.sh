@@ -24,6 +24,9 @@ echo "== rung 5: sampled-threshold depth-2 SAT vs brute force =="
 echo "== rung 6: per-stage YBT conversion vs oracles =="
 "$EIG" tests/test_ybt.eigs || exit 1
 
+echo "== rung 7: Chen–Tal–Wang toolbox vs oracles =="
+"$EIG" tests/test_ctw.eigs || exit 1
+
 echo "== CLI demos (self-checking) =="
 "$EIG" polymethod.eigs 12 60 1 || exit 1
 "$EIG" polymethod.eigs max2sat 12 36 1 || exit 1

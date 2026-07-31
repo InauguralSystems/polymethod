@@ -263,6 +263,44 @@ the coefficients, not the support; this is the measured on-ramp to the
 conversion needs arbitrary-precision integers long before it needs
 memory for monomials.
 
+## Rung 7 (done): the Chen–Tal–Wang toolbox
+
+The distinctive objects of Chen–Tal–Wang (ECCC TR26-039 / STOC 2026, the
+n^2.5−ε THR∘THR frontier), implemented from the primary source, per stage,
+each with a per-input oracle:
+
+- **The Lemma 3.4 structure chain**, exact with its promises *verified*:
+  THR → DOR∘ETHR (one ETHR per achievable value; the disjointness promise
+  checked on every input — never two fire), ETHR → GapAND∘SYM over the
+  first r odd primes (equality fires all; the measured gap: at most 2 of
+  6 primes fire on any non-equal input), and AND∘ETHR → one ETHR by
+  base-B weight packing (exact; packed weights grow as B^c — the same
+  coefficient axis rung 6 measured).
+- **The AW15/CTW 1hotSUM F₂-probabilistic polynomial** (one recursion
+  level, on rung 4's F₂ engine): sample half the coordinates, window the
+  estimate, interpolate exactly inside the window. **Self-validating
+  error accounting**: the construction must fail exactly on the
+  concentration-failure set {x : |Σx − 2Σx_K| > W}, and the measured
+  errors equal that set's size at every window and seed (186/18/0 at
+  W=0/2/4, m=8). At toy m the windowed degree saving is vacuous
+  (√m·log m ≥ m) — what is validated is the mechanism and its error
+  theory, mechanically.
+- **Lemma 3.9's THR-#SAT** in 2^(n/2)·poly time by meet-in-the-middle
+  (sorted halves + a two-pointer sweep) — the counting subroutine inside
+  CTW's Theorem 4.5, exact against brute force.
+
+```bash
+$EIGS tests/test_ctw.eigs        # rung gate: 17 assertions
+```
+
+What is deliberately NOT here: the full CAPP assembly of Theorem 1.2
+(random-restriction column analysis + the quasi-polynomial "type" trick +
+list-approximation advice). The parts it composes now all exist in this
+repo — rung 2's split-and-list, rung 4's F₂ engine, rung 6's amplifier
+(CTW's Lemma 3.12 *is* the BT91 amplifier), and this rung's chain — and
+assembling them at toy scale is the natural rung 8, should the ladder
+continue.
+
 ## The ladder (from the hq research report, easiest → frontier)
 
 | rung | artifact | status |
@@ -273,7 +311,7 @@ memory for monomials.
 | 4 | AC0[⊕] #SAT via F2 probabilistic polynomials (error-vs-degree measured) | **done** |
 | 5 | Depth-2 threshold SAT via sampled-threshold PTFs (support-vs-budget measured) | **done** |
 | 6 | Toy YBT conversion, per-stage, exact monomial/coefficient bookkeeping | **done** |
-| 7 | Chen–Tal–Wang estimator chain (the live frontier) | aspiration |
+| 7 | Chen–Tal–Wang toolbox: the Lemma 3.4 chain, the 1hotSUM construction, THR-#SAT | **done** |
 
 End-to-end ACC0-SAT is deliberately **not** a goal: the conversion is galactic
 at any demo scale (~2^1000 monomials for a toy circuit). Rungs are tested

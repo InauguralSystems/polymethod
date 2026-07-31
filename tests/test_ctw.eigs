@@ -1,0 +1,111 @@
+# ============================================================
+# test_ctw.eigs — rung-7 gate for the Chen–Tal–Wang toolbox
+# ============================================================
+# Run from the repo root: eigenscript tests/test_ctw.eigs
+# Exits 1 on any failure. Numbers probed before being asserted.
+
+load_file of "lib/int_vector.eigs"
+load_file of "src/ac0xor.eigs"
+load_file of "src/ctw.eigs"
+
+fails is 0
+passes is 0
+
+define check(label, got, expected) as:
+    if got == expected:
+        passes is passes + 1
+        print of f"  PASS: {label}"
+    else:
+        fails is fails + 1
+        print of f"  FAIL: {label} (got {got}, expected {expected})"
+
+g is gen_thr_gate of [12, 5, 1]
+
+# ---- A2: THR -> DOR∘ETHR, exact with the DOR promise intact ----
+dor is thr_to_dor_ethr of g
+a2_bad is 0
+a2_promise is 0
+x is 0
+loop while x < 4096:
+    r is dor_ethr_eval of [g, dor, x]
+    if r[0] != (thr_eval of [g, x]):
+        a2_bad is a2_bad + 1
+    if r[1] > 1:
+        a2_promise is a2_promise + 1
+    x is x + 1
+check of ["A2: DOR∘ETHR equals THR on all 4096 inputs", a2_bad, 0]
+check of ["A2: DOR promise (never two ETHRs fire)", a2_promise, 0]
+check of ["A2: DOR width = 17 achievable values", dor.width, 17]
+
+# ---- A3: ETHR -> GapAND∘SYM over 6 primes ----
+v is dor.values[0]
+primes is first_odd_primes of 6
+a3_bad is 0
+a3_eq_all is 1
+a3_maxfired is 0
+x is 0
+loop while x < 4096:
+    s is wsum of [g.w, x]
+    r is gapand_sym_eval of [g.w, v, primes, x]
+    truth is 0
+    if s == v:
+        truth is 1
+        if r[1] != 6:
+            a3_eq_all is 0
+    else:
+        if r[1] > a3_maxfired:
+            a3_maxfired is r[1]
+    if r[0] != truth:
+        a3_bad is a3_bad + 1
+    x is x + 1
+check of ["A3: GapAND∘SYM equals ETHR on all inputs", a3_bad, 0]
+check of ["A3: equality fires all 6 primes", a3_eq_all, 1]
+check of ["A3: measured gap — at most 2 of 6 primes fire on non-equal", a3_maxfired, 2]
+
+# ---- A1: base-B packing, exact; planted fault on the packed target ----
+e2 is {"w": (gen_thr_gate of [12, 4, 2]).w, "v": 0}
+e2.v is wsum of [e2.w, 100]
+packed is and_ethr_to_ethr of [[e2]]
+a1_bad is 0
+x is 0
+loop while x < 4096:
+    if (ethr_eval of [packed.w, packed.v, x]) != (ethr_eval of [e2.w, e2.v, x]):
+        a1_bad is a1_bad + 1
+    x is x + 1
+check of ["A1: packed single ETHR is identical", a1_bad, 0]
+pf_bad is 0
+x is 0
+loop while x < 4096:
+    if (ethr_eval of [packed.w, packed.v + 1, x]) != (ethr_eval of [e2.w, e2.v, x]):
+        pf_bad is pf_bad + 1
+    x is x + 1
+pf_caught is 0
+if pf_bad > 0:
+    pf_caught is 1
+check of [f"A1 planted fault: shifted target detected ({pf_bad} inputs)", pf_caught, 1]
+
+# ---- C: Lemma 3.9 meet-in-the-middle #SAT ----
+for sd in [1, 2]:
+    gc is gen_thr_gate of [16, 6, sd]
+    check of [f"C: mim count equals brute (n=16 seed={sd})", thr_count_mim of gc, thr_count_brute of gc]
+
+# ---- B: the 1hotSUM construction — error == concentration failures ----
+px is {"s": 0, "flags": int_vector_new of 256}
+for wpair in [[0, 186], [2, 18], [4, 0]]:
+    built is onehot_build of [px, 8, wpair[0], 1]
+    r is onehot_check of [8, built, wpair[0]]
+    check of [f"B: W={wpair[0]} errors = {wpair[1]}", r.errors, wpair[1]]
+    check of [f"B: W={wpair[0]} errors equal concentration failures", r.errors, r.conc_fail]
+
+# B planted fault: corrupt coordinate-0 polynomial; accounting must break
+bad_built is onehot_build of [px, 8, 4, 1]
+bad_built.polys[0] is p_add of [px, bad_built.polys[0], [0]]
+rb is onehot_check of [8, bad_built, 4]
+b_caught is 0
+if rb.errors != rb.conc_fail:
+    b_caught is 1
+check of [f"B planted fault: corrupted coordinate breaks the accounting ({rb.errors} vs {rb.conc_fail})", b_caught, 1]
+
+print of f"test_ctw: {passes} passed, {fails} failed"
+if fails > 0:
+    exit of 1
