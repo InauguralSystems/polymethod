@@ -1,0 +1,140 @@
+# ============================================================
+# symplus.eigs — SYM∘AND ("SYM+") evaluation engine
+# ============================================================
+#
+# The base rung of the algorithmic-method ladder (Williams, CCC 2011,
+# Lemma 4.2 shape): given a SYM∘AND circuit — a list of AND monomials
+# (variable-subset bitmasks) feeding a symmetric output function given
+# as a lookup table over the satisfied-monomial count — compute the
+# satisfied-monomial count on ALL 2^n inputs in O(2^n * n) total time,
+# instead of the O(2^n * m) direct evaluation. The transform is the
+# subset-lattice zeta transform: counts[x] = #{ monomials m : m ⊆ x }.
+#
+# Composition-free (house convention): callers load
+# "lib/int_vector.eigs" (stdlib) before this file.
+#
+# The brute-force evaluator below is the EXTERNAL ORACLE: it shares no
+# code with the transform — it evaluates the circuit definition
+# directly, one input at a time. Every engine result must match it
+# byte-for-byte on the full 2^n output vector.
+
+define pm_pow2(n) as:
+    return bit_shl of [1, n]
+
+# ---- minstd LCG: deterministic instance generation, no runtime rand ----
+# state must be in [1, 2147483646]; 48271 * state stays exact in doubles.
+define pm_lcg(state) as:
+    return (state * 48271) % 2147483647
+
+# ---- the engine: zeta transform over the subset lattice ----
+# symplus_counts of [n, monomials] -> int_vector of size 2^n
+define symplus_counts(n, monomials) as:
+    local size is pm_pow2 of n
+    local counts is int_vector_new of size
+    local m_count is len of monomials
+    unobserved:
+        local mi is 0
+        loop while mi < m_count:
+            local m is monomials[mi]
+            counts[m] is counts[m] + 1
+            mi is mi + 1
+        # h = x_i * h1 + h2, iterated: fold each variable's bit upward.
+        local bit is 0
+        loop while bit < n:
+            local step is bit_shl of [1, bit]
+            local x is 0
+            loop while x < size:
+                if (bit_and of [x, step]) != 0:
+                    local lower is bit_xor of [x, step]
+                    counts[x] is counts[x] + counts[lower]
+                x is x + 1
+            bit is bit + 1
+    return counts
+
+# ---- the oracle: direct per-input circuit evaluation, no transform ----
+# brute_counts of [n, monomials] -> int_vector of size 2^n
+define brute_counts(n, monomials) as:
+    local size is pm_pow2 of n
+    local counts is int_vector_new of size
+    local m_count is len of monomials
+    unobserved:
+        local x is 0
+        loop while x < size:
+            local cnt is 0
+            local mi is 0
+            loop while mi < m_count:
+                local m is monomials[mi]
+                if (bit_and of [x, m]) == m:
+                    cnt is cnt + 1
+                mi is mi + 1
+            counts[x] is cnt
+            x is x + 1
+    return counts
+
+# ---- apply the symmetric output table; count satisfying inputs ----
+# sym_sat_count of [counts, table] -> number of x with output 1
+# table[c] is the circuit output when exactly c monomials are satisfied;
+# it must have (max monomial count + 1) entries.
+define sym_sat_count(counts, table) as:
+    local size is len of counts
+    local sat is 0
+    unobserved:
+        local x is 0
+        loop while x < size:
+            if table[counts[x]] == 1:
+                sat is sat + 1
+            x is x + 1
+    return sat
+
+# ---- differential gate: full-vector equality ----
+define counts_equal(a, b) as:
+    if (len of a) != (len of b):
+        return 0
+    local n_items is len of a
+    unobserved:
+        local i is 0
+        loop while i < n_items:
+            if a[i] != b[i]:
+                return 0
+            i is i + 1
+    return 1
+
+# ---- instance generation (seeded, reproducible) ----
+# gen_monomials of [n, m_count, seed] -> list of masks in [0, 2^n)
+define gen_monomials(n, m_count, seed) as:
+    local s is seed
+    if s <= 0:
+        s is 1
+    local size is pm_pow2 of n
+    local monomials is []
+    local i is 0
+    loop while i < m_count:
+        s is pm_lcg of s
+        append of [monomials, s % size]
+        i is i + 1
+    return monomials
+
+# gen_threshold_table of [m_count, k] -> table: output 1 iff count >= k
+define gen_threshold_table(m_count, k) as:
+    local table is []
+    local c is 0
+    loop while c <= m_count:
+        if c >= k:
+            append of [table, 1]
+        else:
+            append of [table, 0]
+        c is c + 1
+    return table
+
+# gen_random_table of [m_count, seed] -> arbitrary symmetric function
+define gen_random_table(m_count, seed) as:
+    local s is seed
+    if s <= 0:
+        s is 1
+    local table is []
+    local c is 0
+    loop while c <= m_count:
+        s is pm_lcg of s
+        append of [table, s % 2]
+        c is c + 1
+    return table

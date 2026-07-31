@@ -1,0 +1,15 @@
+{
+  "name": "polymethod",
+  "build": { "dockerfile": "Dockerfile" },
+  "workspaceFolder": "/workspaces/polymethod",
+  "remoteUser": "root",
+
+  // Prove the toolchain the milestone needs resolves inside the image.
+  "postCreateCommand": "eigenscript --version",
+
+  "customizations": {
+    "vscode": {
+      "settings": { "files.associations": { "*.eigs": "python" } }
+    }
+  }
+}

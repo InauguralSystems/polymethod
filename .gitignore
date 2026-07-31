@@ -1,0 +1,3 @@
+# machine-local benchmark/trend logs
+/benchmarks/runs/
+gmon.out

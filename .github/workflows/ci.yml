@@ -1,0 +1,24 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: milestone gate (in devcontainer)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # Build the devcontainer (EigenScript pinned by .devcontainer/Dockerfile's
+      # EIGS_REF) and run the gate inside it — the same image a Codespace opens.
+      - name: Build devcontainer and run the milestone gate
+        uses: devcontainers/ci@v0.3
+        with:
+          runCmd: EIGS=eigenscript bash tests/run.sh

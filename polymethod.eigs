@@ -1,0 +1,56 @@
+# ============================================================
+# polymethod CLI — run the SYM∘AND engine against its oracle
+# ============================================================
+#
+#   eigenscript polymethod.eigs [n] [m_count] [seed] [k]
+#
+# Generates a seeded random SYM∘AND circuit (m_count AND monomials on
+# n variables, threshold-k symmetric output), evaluates it on all 2^n
+# inputs twice — zeta-transform engine vs direct brute force — and
+# reports agreement, the #SAT count, and wall times. Run from the repo
+# root (load paths are cwd-relative).
+
+load_file of "lib/int_vector.eigs"
+load_file of "src/symplus.eigs"
+
+define main() as:
+    local argv is args of null
+    local n is 12
+    local m_count is 60
+    local seed is 1
+    local k is 15
+    if (len of argv) > 0:
+        n is num of argv[0]
+    if (len of argv) > 1:
+        m_count is num of argv[1]
+    if (len of argv) > 2:
+        seed is num of argv[2]
+    if (len of argv) > 3:
+        k is num of argv[3]
+    else:
+        k is floor of (m_count / 4)
+
+    local monomials is gen_monomials of [n, m_count, seed]
+    local table is gen_threshold_table of [m_count, k]
+
+    local t0 is clock_unix of null
+    local engine is symplus_counts of [n, monomials]
+    local t1 is clock_unix of null
+    local oracle is brute_counts of [n, monomials]
+    local t2 is clock_unix of null
+
+    local agree is counts_equal of [engine, oracle]
+    local sat_engine is sym_sat_count of [engine, table]
+    local sat_oracle is sym_sat_count of [oracle, table]
+    local engine_ms is floor of ((t1 - t0) * 1000)
+    local brute_ms is floor of ((t2 - t1) * 1000)
+
+    print of f"symplus n={n} m={m_count} seed={seed} k={k} agree={agree} sat={sat_engine} sat_oracle={sat_oracle} engine_ms={engine_ms} brute_ms={brute_ms}"
+    if agree != 1:
+        print of "FAIL: engine disagrees with brute-force oracle"
+        exit of 1
+    if sat_engine != sat_oracle:
+        print of "FAIL: sat counts disagree"
+        exit of 1
+
+main of null

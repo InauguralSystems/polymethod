@@ -1,0 +1,69 @@
+# ============================================================
+# test_symplus.eigs — milestone-1 gate for the SYM∘AND engine
+# ============================================================
+# Run from the repo root: eigenscript tests/test_symplus.eigs
+# Exits 1 on any failure.
+
+load_file of "lib/int_vector.eigs"
+load_file of "src/symplus.eigs"
+
+fails is 0
+passes is 0
+
+define check(label, got, expected) as:
+    if got == expected:
+        passes is passes + 1
+        print of f"  PASS: {label}"
+    else:
+        fails is fails + 1
+        print of f"  FAIL: {label} (got {got}, expected {expected})"
+
+# ---- 1. hand-computed case (independent arithmetic, done on paper) ----
+# n=3, monomials x0 (001), x0&x1 (011), x2 (100), threshold k=2.
+# counts by input x = 000..111: 0,1,0,2,1,2,1,3 -> outputs 1 at x=011,101,111.
+hand_monomials is [1, 3, 4]
+hand_table is gen_threshold_table of [3, 2]
+hand_engine is symplus_counts of [3, hand_monomials]
+hand_oracle is brute_counts of [3, hand_monomials]
+check of ["hand case: engine matches oracle vector", counts_equal of [hand_engine, hand_oracle], 1]
+check of ["hand case: engine sat count = 3", sym_sat_count of [hand_engine, hand_table], 3]
+check of ["hand case: oracle sat count = 3", sym_sat_count of [hand_oracle, hand_table], 3]
+check of ["hand case: counts[7] = 3", hand_engine[7], 3]
+check of ["hand case: counts[3] = 2", hand_engine[3], 2]
+
+# ---- 2. planted fault A: corrupt the engine's input; the gate must see it ----
+# (This is what proves the differential is gating at all.)
+dropped is [1, 3]
+fault_engine is symplus_counts of [3, dropped]
+check of ["planted fault: dropped monomial is detected", counts_equal of [fault_engine, hand_oracle], 0]
+
+# ---- 3. planted fault B: flip a symmetric-table entry; sat must move ----
+flipped is gen_threshold_table of [3, 2]
+flipped[3] is 0
+check of ["planted fault: flipped table entry moves sat 3 -> 2", sym_sat_count of [hand_engine, flipped], 2]
+
+# ---- 4. seeded random differential across sizes ----
+for trial_n in [8, 10, 12]:
+    for trial_seed in [1, 2, 3, 4, 5]:
+        monomials is gen_monomials of [trial_n, 50, trial_seed]
+        engine is symplus_counts of [trial_n, monomials]
+        oracle is brute_counts of [trial_n, monomials]
+        check of [f"random n={trial_n} seed={trial_seed}: vectors equal", counts_equal of [engine, oracle], 1]
+        rt is gen_random_table of [50, trial_seed + 100]
+        check of [f"random n={trial_n} seed={trial_seed}: sat equal", sym_sat_count of [engine, rt], sym_sat_count of [oracle, rt]]
+
+# ---- 5. scale smoke: the engine's advantage regime, still oracle-checked ----
+big_monomials is gen_monomials of [14, 100, 7]
+big_engine is symplus_counts of [14, big_monomials]
+big_oracle is brute_counts of [14, big_monomials]
+check of ["scale n=14 m=100: vectors equal", counts_equal of [big_engine, big_oracle], 1]
+
+# ---- 6. empty-monomial edge: mask 0 is the constant-true AND ----
+edge_engine is symplus_counts of [4, [0, 0, 5]]
+edge_oracle is brute_counts of [4, [0, 0, 5]]
+check of ["edge: duplicate constant-true monomials, vectors equal", counts_equal of [edge_engine, edge_oracle], 1]
+check of ["edge: counts[0] sees both constants", edge_engine[0], 2]
+
+print of f"test_symplus: {passes} passed, {fails} failed"
+if fails > 0:
+    exit of 1
