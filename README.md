@@ -146,6 +146,37 @@ the two sides run at wall parity while leaves still save 5.1x) — leaves
 is the clean measure of the restriction mechanism; wall time bundles in
 the interpreter's per-node constant.
 
+## Rung 4 (done): AC0[⊕] #SAT via F2 probabilistic polynomials
+
+The constructive core of Rajgopal–Santhanam–Srinivasan (MFCS 2018): each
+OR/AND gate becomes Razborov's degree-t probabilistic polynomial over F2
+(1 ⊕ ∏(1 ⊕ Σ_{S_i} children), seeded subset sums), XOR gates are exact,
+the composition is one multilinear F2 polynomial per seed, and each
+polynomial is evaluated on **all 2^n inputs** by the F2 version of rung
+1's subset-lattice zeta transform. A per-input majority over r seeds
+estimates the truth table and the count. RSS's actual contribution —
+derandomizing the seeds via small-bias spaces — is **not** implemented;
+seeds come from the repo's LCG (reproducible, not derandomized). The
+strict evaluator with XOR support is the shared-code-free exact oracle.
+
+```bash
+$EIGS tests/test_ac0xor.eigs        # rung gate: 12 assertions
+$EIGS polymethod.eigs ac0x-sweep    # the error-vs-degree sweep
+```
+
+### The measured artifact — the error/degree tradeoff
+
+Pure Razborov unit (one OR of 6 literals, n=8, mean over 5 seeds):
+mismatches fall 124 → 60 → 28 → 15.2 → 7.2 → 5.6 of 256 for t = 1..6 —
+the 2^(-t) decay, halving per degree step, in six rows. On a composed
+depth-3 XOR∘AND∘OR circuit (n=10, 9 approximated gates) single seeds stay
+noisy exactly as the union bound over gates predicts (the parity top gate
+makes every gate error visible), and at t=8 with a 9-seed majority the
+count goes **exact** — verified equal to brute force on three circuit
+seeds with zero truth-table mismatches. Notable measured detail: F2
+cancellation keeps the composed polynomials tiny at these sizes (max 27
+monomials at t=8) — the degree grows, the support doesn't.
+
 ## The ladder (from the hq research report, easiest → frontier)
 
 | rung | artifact | status |
@@ -153,7 +184,7 @@ the interpreter's per-node constant.
 | 1 | SYM∘AND evaluation engine (zeta transform) | **done** |
 | 2 | Split-and-list MAX-2-SAT with a *measured* brute-force crossover | **done** |
 | 3 | AC0 #SAT via a restriction tree (savings-vs-fan-in measured) | **done** |
-| 4 | AC0[⊕] deterministic #SAT (derandomized F2 polynomials) | planned |
+| 4 | AC0[⊕] #SAT via F2 probabilistic polynomials (error-vs-degree measured) | **done** |
 | 5 | ACW depth-2 threshold SAT (probabilistic PTFs) | planned |
 | 6 | Toy YBT/Chen–Papakonstantinou conversion, per-stage only | planned |
 | 7 | Chen–Tal–Wang estimator chain (the live frontier) | aspiration |

@@ -1,0 +1,72 @@
+# ============================================================
+# test_ac0xor.eigs — rung-4 gate for F2-polynomial AC0[⊕] #SAT
+# ============================================================
+# Run from the repo root: eigenscript tests/test_ac0xor.eigs
+# Exits 1 on any failure. Every threshold below was probed before being
+# asserted (the seeds are fixed; the engine is deterministic per seed).
+
+load_file of "lib/int_vector.eigs"
+load_file of "src/ac0xor.eigs"
+
+fails is 0
+passes is 0
+
+define check(label, got, expected) as:
+    if got == expected:
+        passes is passes + 1
+        print of f"  PASS: {label}"
+    else:
+        fails is fails + 1
+        print of f"  FAIL: {label} (got {got}, expected {expected})"
+
+# ---- 1. XOR-only circuits are exact at t=1 (degree-1, no approximation) ----
+xcirc is gen_xor_only of [8, 3]
+xs is ax_single of [8, xcirc, 1, 99]
+check of ["xor-only: count matches brute", xs.count, brute_count_x of [8, xcirc]]
+check of ["xor-only: zero mismatches", xs.mismatches, 0]
+
+# ---- 2. hand case: OR(x0, x1) at n=2, high t -> exact ----
+# truth table 0,1,1,1 -> count 3.
+or2 is [2, [[0, 0, 1], [0, 1, 1]]]
+h is ax_majority of [2, or2, 6, 5, 1]
+check of ["hand OR(x0,x1): majority count = 3", h.count, 3]
+check of ["hand OR(x0,x1): zero mismatches", h.mismatches, 0]
+
+# ---- 3. Razborov error decays with t (pure single-OR unit) ----
+or_circ is [2, [[0, 0, 1], [0, 1, 1], [0, 2, 1], [0, 3, 1], [0, 4, 1], [0, 5, 1]]]
+err1 is 0
+err5 is 0
+for sd in [1, 2, 3, 4, 5]:
+    err1 is err1 + (ax_single of [8, or_circ, 1, sd]).mismatches
+    err5 is err5 + (ax_single of [8, or_circ, 5, sd]).mismatches
+decayed is 0
+if err5 * 4 < err1:
+    decayed is 1
+check of [f"single-OR error decays >4x from t=1 ({err1}) to t=5 ({err5})", decayed, 1]
+
+# ---- 4. exact-count differential: majority t=8 r=9 on depth-3 circuits ----
+for cs in [5, 6, 7]:
+    circ is gen_ac0x of [10, 3, 2, 3, cs]
+    b is brute_count_x of [10, circ]
+    mj is ax_majority of [10, circ, 8, 9, 11]
+    check of [f"depth-3 seed={cs}: majority count equals brute", mj.count, b]
+    check of [f"depth-3 seed={cs}: zero mismatches", mj.mismatches, 0]
+
+# ---- 5. planted fault: toggling the constant monomial flips every output ----
+# On the exact xor-only polynomial (0 mismatches), adding the constant 1
+# must produce 2^n mismatches — the truth-table comparison provably gates.
+pfx is {"s": 99, "flags": int_vector_new of 256}
+pf_poly is ax_build of [pfx, xcirc, 1]
+pf_bad is p_add of [pfx, pf_poly, [0]]
+pf_v is ax_eval_all of [8, pf_bad]
+pf_mism is 0
+x is 0
+loop while x < 256:
+    if pf_v[x] != (brute_eval_x of [xcirc, x]):
+        pf_mism is pf_mism + 1
+    x is x + 1
+check of ["planted fault: constant-toggled poly mismatches on all 256 inputs", pf_mism, 256]
+
+print of f"test_ac0xor: {passes} passed, {fails} failed"
+if fails > 0:
+    exit of 1

@@ -1,0 +1,271 @@
+# ============================================================
+# ac0xor.eigs — AC0[⊕] #SAT via F2 probabilistic polynomials (rung 4)
+# ============================================================
+#
+# The constructive core of Rajgopal–Santhanam–Srinivasan (MFCS 2018):
+# replace each OR/AND gate by Razborov's degree-t probabilistic polynomial
+# over F2 (XOR gates are exact, degree-preserving), compose bottom-up to
+# one multilinear F2 polynomial per seed, evaluate it on ALL 2^n inputs
+# with the F2 subset-lattice zeta transform (rung 1's engine, over F2),
+# and take a per-input majority over r seeds to estimate the truth table
+# and the #SAT count.
+#
+# Honesty note (house rule): RSS's actual contribution — DERANDOMIZING the
+# seed choices with small-bias spaces to get a deterministic worst-case
+# algorithm — is not implemented; seeds here come from the repo's minstd
+# LCG, which makes runs reproducible but not derandomized in the RSS
+# sense. What is measured is the polynomial method's error/degree/size
+# tradeoff itself, against an exact oracle.
+#
+# Circuit nodes extend rung 3's shape with XOR:
+#   [0, v, s]  literal   [1, kids] AND   [2, kids] OR   [3, kids] XOR
+#
+# Oracle: brute_eval_x / brute_count_x — strict evaluation of the circuit
+# on full assignments, sharing no code with the polynomial path.
+#
+# F2 polynomial = list of distinct monomial masks (multilinear; x^2 = x,
+# so a monomial product is the OR of masks). Composition-free: callers
+# load "lib/int_vector.eigs" first.
+
+define ax_lcg(st) as:
+    st.s is (st.s * 48271) % 2147483647
+    return st.s
+
+# ---- the oracle: strict two-valued evaluation with XOR ----
+define brute_eval_x(node, bits) as:
+    if node[0] == 0:
+        local rv is 0
+        if (bit_and of [bit_shr of [bits, node[1]], 1]) == node[2]:
+            rv is 1
+        return rv
+    local kids is node[1]
+    local i is 0
+    if node[0] == 1:
+        loop while i < (len of kids):
+            if (brute_eval_x of [kids[i], bits]) == 0:
+                return 0
+            i is i + 1
+        return 1
+    if node[0] == 2:
+        loop while i < (len of kids):
+            if (brute_eval_x of [kids[i], bits]) == 1:
+                return 1
+            i is i + 1
+        return 0
+    local acc is 0
+    loop while i < (len of kids):
+        acc is bit_xor of [acc, brute_eval_x of [kids[i], bits]]
+        i is i + 1
+    return acc
+
+define brute_count_x(n, circ) as:
+    local size is bit_shl of [1, n]
+    local cnt is 0
+    local x is 0
+    unobserved:
+        loop while x < size:
+            cnt is cnt + (brute_eval_x of [circ, x])
+            x is x + 1
+    return cnt
+
+# ---- F2 multilinear polynomial arithmetic (mask lists, set semantics) ----
+# All ops thread a scratch flags int_vector of size 2^n through px (the
+# shared state dict) to cancel duplicate masks mod 2.
+define p_collect(px, touched) as:
+    local out is []
+    local i is 0
+    loop while i < (len of touched):
+        local m is touched[i]
+        if px.flags[m] == 1:
+            append of [out, m]
+        px.flags[m] is 0
+        i is i + 1
+    return out
+
+define p_toggle(px, touched, m) as:
+    if px.flags[m] == 0:
+        px.flags[m] is 1
+    else:
+        px.flags[m] is 0
+    append of [touched, m]
+
+define p_add(px, a, b) as:
+    local touched is []
+    local i is 0
+    loop while i < (len of a):
+        p_toggle of [px, touched, a[i]]
+        i is i + 1
+    i is 0
+    loop while i < (len of b):
+        p_toggle of [px, touched, b[i]]
+        i is i + 1
+    return p_collect of [px, touched]
+
+define p_mul(px, a, b) as:
+    local touched is []
+    local i is 0
+    unobserved:
+        loop while i < (len of a):
+            local j is 0
+            loop while j < (len of b):
+                p_toggle of [px, touched, bit_or of [a[i], b[j]]]
+                j is j + 1
+            i is i + 1
+    return p_collect of [px, touched]
+
+# ---- Razborov's probabilistic OR/AND, exact XOR, composed bottom-up ----
+# or_poly: 1 ⊕ ∏_{i<t} (1 ⊕ Σ_{j in S_i} child_j), S_i seeded coin flips.
+define or_poly(px, kid_polys, t) as:
+    local one is [0]
+    local prod is [0]
+    local i is 0
+    loop while i < t:
+        local r_sum is []
+        local j is 0
+        loop while j < (len of kid_polys):
+            if ((ax_lcg of px) % 2) == 1:
+                r_sum is p_add of [px, r_sum, kid_polys[j]]
+            j is j + 1
+        prod is p_mul of [px, prod, p_add of [px, one, r_sum]]
+        i is i + 1
+    return p_add of [px, one, prod]
+
+define ax_build(px, node, t) as:
+    if node[0] == 0:
+        local m is bit_shl of [1, node[1]]
+        if node[2] == 1:
+            return [m]
+        return p_add of [px, [m], [0]]
+    local kids is node[1]
+    local kid_polys is []
+    local i is 0
+    loop while i < (len of kids):
+        append of [kid_polys, ax_build of [px, kids[i], t]]
+        i is i + 1
+    if node[0] == 2:
+        return or_poly of [px, kid_polys, t]
+    if node[0] == 1:
+        # AND(y) = 1 ⊕ OR(1⊕y_1, ..., 1⊕y_c)
+        local negs is []
+        i is 0
+        loop while i < (len of kid_polys):
+            append of [negs, p_add of [px, kid_polys[i], [0]]]
+            i is i + 1
+        return p_add of [px, [0], or_poly of [px, negs, t]]
+    local acc is []
+    i is 0
+    loop while i < (len of kid_polys):
+        acc is p_add of [px, acc, kid_polys[i]]
+        i is i + 1
+    return acc
+
+# ---- evaluate a polynomial on all 2^n inputs: F2 zeta transform ----
+define ax_eval_all(n, poly) as:
+    local size is bit_shl of [1, n]
+    local v is int_vector_new of size
+    local i is 0
+    unobserved:
+        loop while i < (len of poly):
+            local m is poly[i]
+            v[m] is bit_xor of [v[m], 1]
+            i is i + 1
+        local bit is 0
+        loop while bit < n:
+            local step is bit_shl of [1, bit]
+            local x is 0
+            loop while x < size:
+                if (bit_and of [x, step]) != 0:
+                    v[x] is bit_xor of [v[x], v[bit_xor of [x, step]]]
+                x is x + 1
+            bit is bit + 1
+    return v
+
+# ---- top level ----
+# Single seed: {count, mismatches, monomials} vs the exact truth table.
+define ax_single(n, circ, t, seed) as:
+    local px is {"s": seed, "flags": int_vector_new of (bit_shl of [1, n])}
+    if px.s <= 0:
+        px.s is 1
+    local poly is ax_build of [px, circ, t]
+    local v is ax_eval_all of [n, poly]
+    local size is bit_shl of [1, n]
+    local cnt is 0
+    local mism is 0
+    local x is 0
+    unobserved:
+        loop while x < size:
+            cnt is cnt + v[x]
+            if v[x] != (brute_eval_x of [circ, x]):
+                mism is mism + 1
+            x is x + 1
+    return {"count": cnt, "mismatches": mism, "monomials": len of poly}
+
+# Majority over r seeds: {count, mismatches, max_monomials}.
+define ax_majority(n, circ, t, r, seed) as:
+    local size is bit_shl of [1, n]
+    local votes is int_vector_new of size
+    local maxmono is 0
+    local ri is 0
+    loop while ri < r:
+        local px is {"s": seed + (ri * 7919), "flags": int_vector_new of size}
+        if px.s <= 0:
+            px.s is 1
+        local poly is ax_build of [px, circ, t]
+        if (len of poly) > maxmono:
+            maxmono is len of poly
+        local v is ax_eval_all of [n, poly]
+        local x is 0
+        unobserved:
+            loop while x < size:
+                votes[x] is votes[x] + v[x]
+                x is x + 1
+        ri is ri + 1
+    local cnt is 0
+    local mism is 0
+    local x is 0
+    unobserved:
+        loop while x < size:
+            local pred is 0
+            if (votes[x] * 2) > r:
+                pred is 1
+            cnt is cnt + pred
+            if pred != (brute_eval_x of [circ, x]):
+                mism is mism + 1
+            x is x + 1
+    return {"count": cnt, "mismatches": mism, "max_monomials": maxmono}
+
+# ---- seeded circuit generation: depth-3 XOR∘AND∘OR ----
+define gen_ac0x(n, m_count, w, k, seed) as:
+    local st is {"s": seed}
+    if st.s <= 0:
+        st.s is 1
+    local ands is []
+    local i is 0
+    loop while i < m_count:
+        local ors is []
+        local a is 0
+        loop while a < w:
+            local lits is []
+            local j is 0
+            loop while j < k:
+                local v is (ax_lcg of st) % n
+                local sg is (ax_lcg of st) % 2
+                append of [lits, [0, v, sg]]
+                j is j + 1
+            append of [ors, [2, lits]]
+            a is a + 1
+        append of [ands, [1, ors]]
+        i is i + 1
+    return [3, ands]
+
+# XOR-only circuit (exact at any t): XOR of single literals.
+define gen_xor_only(n, seed) as:
+    local st is {"s": seed}
+    if st.s <= 0:
+        st.s is 1
+    local lits is []
+    local v is 0
+    loop while v < n:
+        append of [lits, [0, v, (ax_lcg of st) % 2]]
+        v is v + 1
+    return [3, lits]

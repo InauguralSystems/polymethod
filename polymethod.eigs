@@ -16,6 +16,7 @@ load_file of "lib/int_vector.eigs"
 load_file of "src/symplus.eigs"
 load_file of "src/split_list.eigs"
 load_file of "src/restriction.eigs"
+load_file of "src/ac0xor.eigs"
 
 define run_ac0(n, circ, label, do_brute) as:
     local t0 is clock_unix of null
@@ -107,6 +108,36 @@ define main() as:
         run_ac0 of [16, gen_ac0_3 of [16, 8, 3, 3, seed], f"depth3 m=8 w=3 k=3 seed={seed}", 1]
         # scale showcase, engine only (brute unaffordable): n=24
         run_ac0 of [24, gen_kcnf of [24, 48, 3, seed], f"3-cnf m=48 seed={seed}", 0]
+        return 0
+    if (len of argv) > 0 and argv[0] == "ac0x-sweep":
+        local seed is 11
+        if (len of argv) > 1:
+            seed is num of argv[1]
+        # the pure Razborov unit: error vs t on one OR of 6 literals, n=8
+        local or_circ is [2, [[0, 0, 1], [0, 1, 1], [0, 2, 1], [0, 3, 1], [0, 4, 1], [0, 5, 1]]]
+        for t in [1, 2, 3, 4, 5, 6]:
+            local tot is 0
+            local mono is 0
+            for sd in [1, 2, 3, 4, 5]:
+                local s is ax_single of [8, or_circ, t, sd]
+                tot is tot + s.mismatches
+                if s.monomials > mono:
+                    mono is s.monomials
+            print of f"ac0x single-OR t={t} mean_mismatches={tot / 5} of 256 max_monomials={mono}"
+        # composed depth-3 XOR∘AND∘OR at n=10: error vs t, then majority
+        local circ is gen_ac0x of [10, 3, 2, 3, 5]
+        local b is brute_count_x of [10, circ]
+        for t in [2, 4, 6, 8]:
+            local s is ax_single of [10, circ, t, seed]
+            print of f"ac0x circuit t={t} count={s.count} brute={b} mismatches={s.mismatches} of 1024 monomials={s.monomials}"
+        local mj is ax_majority of [10, circ, 8, 9, seed]
+        local agree is "0"
+        if mj.count == b:
+            agree is "1"
+        print of f"ac0x circuit t=8 r=9 majority count={mj.count} brute={b} agree={agree} mismatches={mj.mismatches}"
+        if agree != "1":
+            print of "FAIL: majority count disagrees with brute force"
+            exit of 1
         return 0
     local n is 12
     local m_count is 60
