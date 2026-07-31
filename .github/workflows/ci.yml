@@ -21,4 +21,5 @@ jobs:
       - name: Build devcontainer and run the milestone gate
         uses: devcontainers/ci@v0.3
         with:
+          push: never
           runCmd: EIGS=eigenscript bash tests/run.sh
