@@ -15,9 +15,12 @@ Root EigenScript issues get fixed upstream instead of worked around here.
   `EIGS_JIT_OFF=1`); corrupted indices follow the predicted arithmetic
   progression (spacing 1e8 / iterations-per-outer). Minimal repro: a single
   loop to 1.5e8 stops at exactly 1e8 with exit 0. `tests/probe_mismatch.eigs`
-  is the locating tool. **Until #772 lands, keep any single run's total loop
-  iterations under 1e8** — the CI gate (n=12) and demo defaults respect this;
-  n>=19 oracle runs with m=1000 do not.
+  is the locating tool. **FIXED upstream 2026-07-31** (EigenScript PR #773,
+  `72c85e0`): the cap now fires only under an armed sandbox budget, and the
+  counter widened to 64-bit. Differential re-run at n=19/m=1000 and
+  n=16/m=4000: 0 mismatches. The 1e8-iteration ceiling still applies when
+  running against the v0.33.0 CI pin — lift it when the pin moves past the
+  next release.
 - **Rung-1 build friction was near zero (2026-07-30).** The engine needed
   `bit_and`/`bit_or`/`bit_xor`/`bit_shl` (present as builtins), stdlib
   `lib/int_vector.eigs` buffers for the 2^n count vectors, and `%`. Nothing
