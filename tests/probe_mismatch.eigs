@@ -1,0 +1,33 @@
+# probe_mismatch.eigs — locate and describe engine/oracle disagreements
+# usage: eigenscript tests/probe_mismatch.eigs n m_count seed
+
+load_file of "lib/int_vector.eigs"
+load_file of "src/symplus.eigs"
+
+argv is args of null
+n is num of argv[0]
+m_count is num of argv[1]
+seed is num of argv[2]
+
+monomials is gen_monomials of [n, m_count, seed]
+engine is symplus_counts of [n, monomials]
+oracle is brute_counts of [n, monomials]
+
+size is len of engine
+mismatches is 0
+first_idx is 0 - 1
+bad is []
+i is 0
+unobserved:
+    loop while i < size:
+        if engine[i] != oracle[i]:
+            mismatches is mismatches + 1
+            if mismatches <= 10:
+                append of [bad, i]
+            if first_idx < 0:
+                first_idx is i
+        i is i + 1
+
+print of f"n={n} m={m_count} seed={seed} size={size} mismatches={mismatches} first_idx={first_idx}"
+for idx in bad:
+    print of f"  mismatch idx={idx} engine={engine[idx]} oracle={oracle[idx]}"

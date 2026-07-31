@@ -5,6 +5,19 @@ Root EigenScript issues get fixed upstream instead of worked around here.
 
 ## Open Watchlist
 
+- **UPSTREAM BUG FOUND DAY ONE (2026-07-31): silent loop truncation at 1e8
+  cumulative iterations — EigenScript #772.** The rung-1 full-vector
+  differential flagged 4 wrong outputs in 524,288 at n=19, m=1000; an
+  independent Python third implementation proved the *brute-force oracle
+  side* wrong — the runtime's default sandbox loop cap (100,000,000, active
+  outside any sandbox) silently breaks the running loop every 1e8 cumulative
+  iterations. Deterministic, tier-independent (reproduces under
+  `EIGS_JIT_OFF=1`); corrupted indices follow the predicted arithmetic
+  progression (spacing 1e8 / iterations-per-outer). Minimal repro: a single
+  loop to 1.5e8 stops at exactly 1e8 with exit 0. `tests/probe_mismatch.eigs`
+  is the locating tool. **Until #772 lands, keep any single run's total loop
+  iterations under 1e8** — the CI gate (n=12) and demo defaults respect this;
+  n>=19 oracle runs with m=1000 do not.
 - **Rung-1 build friction was near zero (2026-07-30).** The engine needed
   `bit_and`/`bit_or`/`bit_xor`/`bit_shl` (present as builtins), stdlib
   `lib/int_vector.eigs` buffers for the 2^n count vectors, and `%`. Nothing
