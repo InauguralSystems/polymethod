@@ -107,13 +107,52 @@ binding constraint.
 - Instance generation is seeded (in-repo minstd LCG), so every result is
   reproducible bit-for-bit; no runtime randomness anywhere.
 
+## Rung 3 (done): AC0 #SAT via a restriction tree
+
+The mechanism restriction families (Impagliazzo–Matthews–Paturi, SODA 2012)
+formalize, in its deterministic skeleton: restrict variables one at a time
+(most-live-occurrences pivot), let the circuit collapse under three-valued
+evaluation, and add 2^(free) the moment the root is decided. All savings
+over 2^n are early collapse — the switching behavior itself. The full IMP
+machinery (random restrictions with switching-lemma bookkeeping and provable
+worst-case savings) is **not** implemented; what is measured is the
+empirical savings of the same mechanism. The strict two-valued brute-force
+evaluator shares no code with the engine and must agree on the exact count.
+
+```bash
+$EIGS tests/test_restriction.eigs        # rung gate: 26 assertions
+$EIGS polymethod.eigs ac0 14 28 3 1      # one instance, vs brute force
+$EIGS polymethod.eigs ac0-sweep 1        # the fan-in sweep
+```
+
+### The measured artifact — savings vs bottom fan-in
+
+Random k-CNF, n=16, m=32, seed 1, exact counts oracle-verified:
+
+| bottom fan-in k | tree leaves | 2^16 | structural savings |
+|---|---|---|---|
+| 2 | 51 | 65,536 | 1285x |
+| 3 | 1,109 | 65,536 | 59x |
+| 4 | 7,092 | 65,536 | 9.2x |
+| 5 | 12,856 | 65,536 | 5.1x |
+
+Savings degrade steeply as bottom fan-in grows — the switching-lemma
+prediction made visible in four rows. A depth-3 OR∘AND∘OR instance decides
+in 13 leaves; at n=24 (engine only, brute unaffordable) a 3-CNF counts
+10,023 solutions visiting 26,058 leaves of 2^24 = 16.7M (644x). Honest
+caveat the data itself shows: each tree node pays an O(circuit) analyze
+pass, so *wall-clock* advantage erodes faster than leaf savings (at k=5
+the two sides run at wall parity while leaves still save 5.1x) — leaves
+is the clean measure of the restriction mechanism; wall time bundles in
+the interpreter's per-node constant.
+
 ## The ladder (from the hq research report, easiest → frontier)
 
 | rung | artifact | status |
 |---|---|---|
 | 1 | SYM∘AND evaluation engine (zeta transform) | **done** |
 | 2 | Split-and-list MAX-2-SAT with a *measured* brute-force crossover | **done** |
-| 3 | AC0 #SAT via restriction families | next |
+| 3 | AC0 #SAT via a restriction tree (savings-vs-fan-in measured) | **done** |
 | 4 | AC0[⊕] deterministic #SAT (derandomized F2 polynomials) | planned |
 | 5 | ACW depth-2 threshold SAT (probabilistic PTFs) | planned |
 | 6 | Toy YBT/Chen–Papakonstantinou conversion, per-stage only | planned |

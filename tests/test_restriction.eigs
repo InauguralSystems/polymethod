@@ -1,0 +1,71 @@
+# ============================================================
+# test_restriction.eigs — rung-3 gate for restriction-tree AC0 #SAT
+# ============================================================
+# Run from the repo root: eigenscript tests/test_restriction.eigs
+# Exits 1 on any failure.
+
+load_file of "lib/int_vector.eigs"
+load_file of "src/restriction.eigs"
+
+fails is 0
+passes is 0
+
+define check(label, got, expected) as:
+    if got == expected:
+        passes is passes + 1
+        print of f"  PASS: {label}"
+    else:
+        fails is fails + 1
+        print of f"  FAIL: {label} (got {got}, expected {expected})"
+
+# ---- 1. hand cases (counted on paper) ----
+# (x0 | x1) & (!x1 | x2): x1=0 -> need x0 (2 assignments); x1=1 -> need x2
+# (2 assignments). #SAT = 4 of 8.
+hand is [1, [[2, [[0, 0, 1], [0, 1, 1]]], [2, [[0, 1, 0], [0, 2, 1]]]]]
+check of ["hand: brute #SAT = 4", brute_count of [3, hand], 4]
+hand_rt is rt_count of [3, hand]
+check of ["hand: engine #SAT = 4", hand_rt.count, 4]
+
+# (x0 | x1) & (x0 | x2): x0=1 -> 4; x0=0 -> x1&x2 -> 1. #SAT = 5.
+pair_a is [1, [[2, [[0, 0, 1], [0, 1, 1]]], [2, [[0, 0, 1], [0, 2, 1]]]]]
+check of ["hand: correlated pair #SAT = 5", (rt_count of [3, pair_a]).count, 5]
+
+# ---- 2. constants and degenerate shapes ----
+check of ["empty AND is the constant 1: count = 2^4", (rt_count of [4, [1, []]]).count, 16]
+check of ["empty OR is the constant 0: count = 0", (rt_count of [4, [2, []]]).count, 0]
+single_lit is [0, 2, 1]
+check of ["bare literal: count = 2^(n-1)", (rt_count of [4, single_lit]).count, 8]
+
+# ---- 3. planted fault: one flipped literal occurrence must be caught ----
+# pair_b flips ONE occurrence of x0 in pair_a: (!x0 | x1) & (x0 | x2).
+# x0=1 -> need x1 (2); x0=0 -> need x2 (2). #SAT = 4 != 5 — so an engine
+# fed the corrupted circuit disagrees with the oracle on the original.
+pair_b is [1, [[2, [[0, 0, 0], [0, 1, 1]]], [2, [[0, 0, 1], [0, 2, 1]]]]]
+pb_engine is rt_count of [3, pair_b]
+pf_caught is 0
+if pb_engine.count != (brute_count of [3, pair_a]):
+    pf_caught is 1
+check of ["planted fault: flipped occurrence detected by the differential", pf_caught, 1]
+
+# ---- 4. seeded exact-count differential across families and sizes ----
+for trial_n in [8, 10, 12]:
+    for trial_seed in [1, 2, 3]:
+        cnf is gen_kcnf of [trial_n, trial_n * 2, 3, trial_seed]
+        b is brute_count of [trial_n, cnf]
+        e is rt_count of [trial_n, cnf]
+        check of [f"3-CNF n={trial_n} seed={trial_seed}: counts equal", e.count, b]
+        d3 is gen_ac0_3 of [trial_n, 4, 3, 3, trial_seed + 50]
+        b3 is brute_count of [trial_n, d3]
+        e3 is rt_count of [trial_n, d3]
+        check of [f"depth-3 n={trial_n} seed={trial_seed}: counts equal", e3.count, b3]
+
+# ---- 5. savings sanity: the tree must beat enumeration on easy fan-in ----
+sv is rt_count of [14, gen_kcnf of [14, 28, 2, 9]]
+sv_ok is 0
+if sv.leaves < 16384:
+    sv_ok is 1
+check of ["2-CNF n=14: leaves < 2^n (collapse happens)", sv_ok, 1]
+
+print of f"test_restriction: {passes} passed, {fails} failed"
+if fails > 0:
+    exit of 1

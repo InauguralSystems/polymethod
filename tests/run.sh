@@ -12,8 +12,12 @@ echo "== rung 1: SYM∘AND engine vs brute-force oracle =="
 echo "== rung 2: split-and-list MAX-2-SAT vs brute force + certificate =="
 "$EIG" tests/test_split_list.eigs || exit 1
 
+echo "== rung 3: restriction-tree AC0 #SAT vs brute force =="
+"$EIG" tests/test_restriction.eigs || exit 1
+
 echo "== CLI demos (self-checking) =="
 "$EIG" polymethod.eigs 12 60 1 || exit 1
 "$EIG" polymethod.eigs max2sat 12 36 1 || exit 1
+"$EIG" polymethod.eigs ac0 14 28 3 1 || exit 1
 
 echo "polymethod gate: all green"

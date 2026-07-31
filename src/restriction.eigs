@@ -1,0 +1,186 @@
+# ============================================================
+# restriction.eigs — AC0 #SAT via a restriction tree (rung 3)
+# ============================================================
+#
+# The algorithmic core that restriction families (Impagliazzo–Matthews–
+# Paturi, SODA 2012) formalize: restrict variables one at a time, let the
+# circuit collapse under the partial assignment, and count satisfying
+# assignments by adding 2^(free) the moment the root is decided. Savings
+# over 2^n come entirely from early collapse — on AC0 circuits with small
+# bottom fan-in the switching behavior decides the root long before all
+# variables are set. The measured artifact is exactly that: tree leaves
+# visited vs 2^n, as a function of bottom fan-in and depth.
+#
+# Honesty note (per the house rules): this is the DETERMINISTIC
+# restriction-tree skeleton with a most-frequent-variable pivot. The full
+# IMP machinery — random restrictions with switching-lemma bookkeeping
+# giving PROVABLE worst-case 2^(n(1-mu)) savings — is not implemented;
+# what is measured here is the empirical savings of the same mechanism.
+#
+# Circuit representation (nested lists, formula-shaped):
+#   [0, v, s]        literal: variable v, satisfied when its bit == s
+#   [1, [children]]  AND
+#   [2, [children]]  OR
+# An empty AND is the constant 1; an empty OR is the constant 0.
+#
+# Oracle discipline: brute_count evaluates the circuit STRICTLY on every
+# full assignment (recursive two-valued eval — no code shared with the
+# three-valued analyze path) and must agree with the engine's exact count.
+#
+# Composition-free: callers load "lib/int_vector.eigs" first.
+
+# ---- deterministic generation (minstd, as elsewhere in the repo) ----
+define rt_lcg(state) as:
+    return (state * 48271) % 2147483647
+
+# Random k-CNF: AND of m ORs of k literals over distinct variables.
+define gen_kcnf(n, m_count, k, seed) as:
+    local s is seed
+    if s <= 0:
+        s is 1
+    local clauses is []
+    local i is 0
+    loop while i < m_count:
+        local lits is []
+        local used is int_vector_new of n
+        local j is 0
+        loop while j < k:
+            s is rt_lcg of s
+            local v is s % n
+            if used[v] == 0:
+                used[v] is 1
+                s is rt_lcg of s
+                append of [lits, [0, v, s % 2]]
+                j is j + 1
+        append of [clauses, [2, lits]]
+        i is i + 1
+    return [1, clauses]
+
+# Random depth-3 OR∘AND∘OR: m ANDs of w ORs of k literals.
+define gen_ac0_3(n, m_count, w, k, seed) as:
+    local s is seed
+    if s <= 0:
+        s is 1
+    local ands is []
+    local i is 0
+    loop while i < m_count:
+        local ors is []
+        local a is 0
+        loop while a < w:
+            local lits is []
+            local j is 0
+            loop while j < k:
+                s is rt_lcg of s
+                local v is s % n
+                s is rt_lcg of s
+                append of [lits, [0, v, s % 2]]
+                j is j + 1
+            append of [ors, [2, lits]]
+            a is a + 1
+        append of [ands, [1, ors]]
+        i is i + 1
+    return [2, ands]
+
+# ---- the oracle: strict evaluation, no unknowns ----
+define brute_eval(node, bits) as:
+    if node[0] == 0:
+        local return_val is 0
+        if (bit_and of [bit_shr of [bits, node[1]], 1]) == node[2]:
+            return_val is 1
+        return return_val
+    local kids is node[1]
+    local i is 0
+    if node[0] == 1:
+        loop while i < (len of kids):
+            if (brute_eval of [kids[i], bits]) == 0:
+                return 0
+            i is i + 1
+        return 1
+    loop while i < (len of kids):
+        if (brute_eval of [kids[i], bits]) == 1:
+            return 1
+        i is i + 1
+    return 0
+
+define brute_count(n, circ) as:
+    local size is bit_shl of [1, n]
+    local cnt is 0
+    local x is 0
+    unobserved:
+        loop while x < size:
+            cnt is cnt + (brute_eval of [circ, x])
+            x is x + 1
+    return cnt
+
+# ---- the engine: three-valued analyze + restriction tree ----
+# values[v] in {-1 unassigned, 0, 1}. analyze returns -1/0/1 and, for
+# undecided gates, accumulates live-literal frequencies into freq (a
+# branching heuristic only — early exits make it approximate, which
+# cannot affect correctness, only pivot choice).
+define rt_analyze(node, values, freq) as:
+    if node[0] == 0:
+        local b is values[node[1]]
+        if b < 0:
+            freq[node[1]] is freq[node[1]] + 1
+            return 0 - 1
+        local return_val is 0
+        if b == node[2]:
+            return_val is 1
+        return return_val
+    local kids is node[1]
+    local unknown is 0
+    local i is 0
+    if node[0] == 1:
+        loop while i < (len of kids):
+            local r is rt_analyze of [kids[i], values, freq]
+            if r == 0:
+                return 0
+            if r < 0:
+                unknown is 1
+            i is i + 1
+        if unknown == 1:
+            return 0 - 1
+        return 1
+    loop while i < (len of kids):
+        local r is rt_analyze of [kids[i], values, freq]
+        if r == 1:
+            return 1
+        if r < 0:
+            unknown is 1
+        i is i + 1
+    if unknown == 1:
+        return 0 - 1
+    return 0
+
+# Shared mutable state crosses function boundaries as a dict (the _ui
+# pattern): RT.leaves counts decided nodes, RT.nodes all tree nodes.
+define rt_count_rec(circ, n, values, assigned, rt) as:
+    rt.nodes is rt.nodes + 1
+    local freq is int_vector_new of n
+    local r is rt_analyze of [circ, values, freq]
+    if r >= 0:
+        rt.leaves is rt.leaves + 1
+        if r == 0:
+            return 0
+        return bit_shl of [1, n - assigned]
+    local best is 0
+    local bi is 0
+    local v is 0
+    loop while v < n:
+        if freq[v] > best:
+            best is freq[v]
+            bi is v
+        v is v + 1
+    values[bi] is 0
+    local c0 is rt_count_rec of [circ, n, values, assigned + 1, rt]
+    values[bi] is 1
+    local c1 is rt_count_rec of [circ, n, values, assigned + 1, rt]
+    values[bi] is 0 - 1
+    return c0 + c1
+
+# Top level: returns {count, leaves, nodes}.
+define rt_count(n, circ) as:
+    local values is int_vector_filled of [n, 0 - 1]
+    local rt is {"leaves": 0, "nodes": 0}
+    local c is rt_count_rec of [circ, n, values, 0, rt]
+    return {"count": c, "leaves": rt.leaves, "nodes": rt.nodes}
