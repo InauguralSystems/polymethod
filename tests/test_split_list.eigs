@@ -1,0 +1,78 @@
+# ============================================================
+# test_split_list.eigs — rung-2 gate for split-and-list MAX-2-SAT
+# ============================================================
+# Run from the repo root: eigenscript tests/test_split_list.eigs
+# Exits 1 on any failure.
+
+load_file of "lib/int_vector.eigs"
+load_file of "src/split_list.eigs"
+
+fails is 0
+passes is 0
+
+define check(label, got, expected) as:
+    if got == expected:
+        passes is passes + 1
+        print of f"  PASS: {label}"
+    else:
+        fails is fails + 1
+        print of f"  FAIL: {label} (got {got}, expected {expected})"
+
+# ---- 1. hand case (worked on paper): the four sign-combos on (x0, x1) ----
+# Any assignment satisfies exactly 3 of the 4 clauses; optimum = 3.
+hand is [[0, 1, 1, 1], [0, 0, 1, 0], [0, 1, 1, 0], [0, 0, 1, 1]]
+hand_brute is brute_max2sat of [3, hand]
+hand_sl is sl_max2sat of [3, hand]
+check of ["hand case: brute optimum = 3", hand_brute, 3]
+check of ["hand case: split-and-list optimum = 3", hand_sl.opt, 3]
+check of ["hand case: certificate matches", hand_sl.ok, 1]
+
+# ---- 2. all-satisfiable and pathological-small edges ----
+one_clause is [[0, 1, 2, 0]]
+edge_sl is sl_max2sat of [3, one_clause]
+check of ["edge: single clause optimum = 1", edge_sl.opt, 1]
+check of ["edge: single clause certificate", edge_sl.ok, 1]
+empty_sl is sl_max2sat of [6, []]
+check of ["edge: zero clauses optimum = 0", empty_sl.opt, 0]
+
+# ---- 3. seeded differential across sizes: sl == brute, certified ----
+for trial_n in [6, 9, 12]:
+    for trial_seed in [1, 2, 3, 4, 5]:
+        clauses is gen_max2sat of [trial_n, trial_n * 3, trial_seed]
+        b is brute_max2sat of [trial_n, clauses]
+        s is sl_max2sat of [trial_n, clauses]
+        check of [f"random n={trial_n} seed={trial_seed}: optima equal", s.opt, b]
+        check of [f"random n={trial_n} seed={trial_seed}: certified", s.ok, 1]
+
+# ---- 4. planted fault: corrupt a weight table; the certificate must gate ----
+# Inflate W01[0] by 10 and register the corrupted value in the search
+# structures: the search then claims a t strictly above the true optimum for
+# a (0, 0, a2) triangle. No real assignment reaches that t, so the
+# certificate re-evaluation MUST disagree — this proves the gate gates.
+pf_clauses is gen_max2sat of [9, 27, 7]
+pf_st is sl_build of [9, pf_clauses]
+pf_st.tables[0][0] is pf_st.tables[0][0] + 10
+corrupt_w is pf_st.tables[0][0]
+pf_st.m is pf_st.m + 10
+loop while (len of pf_st.bucket01) <= pf_st.m:
+    append of [pf_st.bucket01, null]
+    append of [pf_st.maskB, null]
+    append of [pf_st.maskC, null]
+if pf_st.bucket01[corrupt_w] == null:
+    pf_st.bucket01[corrupt_w] is []
+append of [pf_st.bucket01[corrupt_w], 0]
+pf_r is sl_search of pf_st
+pf_bits is sl_assignment of [pf_st, pf_r[1], pf_r[2], pf_r[3]]
+pf_cert is check_assignment of [pf_clauses, pf_bits]
+pf_caught is 0
+if pf_cert != pf_r[0]:
+    pf_caught is 1
+check of ["planted fault: inflated table entry is caught by the certificate", pf_caught, 1]
+
+# ---- 5. memory accounting sanity ----
+acct is sl_build of [12, gen_max2sat of [12, 36, 3]]
+check of ["table entries = N0*N1 + N0*N2 + N1*N2", acct.table_entries, (16 * 16) + (16 * 16) + (16 * 16)]
+
+print of f"test_split_list: {passes} passed, {fails} failed"
+if fails > 0:
+    exit of 1

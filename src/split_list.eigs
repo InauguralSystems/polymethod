@@ -1,0 +1,307 @@
+# ============================================================
+# split_list.eigs — split-and-list MAX-2-SAT (Williams, TCS 348, 2005)
+# ============================================================
+#
+# Rung 2 of the ladder. Split the n variables into three parts, enumerate
+# the 2^(n/3) partial assignments of each part, precompute pairwise
+# clause-weight tables W01/W02/W12 (the O(2^(2n/3)) memory objects — the
+# cliff), and find the optimum as a maximum-weight triangle: iterate the
+# target t downward over weight splits (k01, k02, k12), detecting a
+# triangle for each split. The inner detection uses bit-packed Boolean row
+# masks (24-bit words) — the practical stand-in for fast Boolean matrix
+# multiplication; only its existence matters to the theory (hq report §6).
+#
+# Two oracles, per the house contract:
+#   1. brute_max2sat — direct 2^n enumeration, shares no code.
+#   2. The CERTIFICATE — the winning (a0,a1,a2) is decoded into a full
+#      assignment and re-evaluated clause-by-clause via check_assignment
+#      (independent path); its count must equal the claimed optimum.
+#
+# Composition-free: callers load "lib/int_vector.eigs" first.
+#
+# Clause representation: [u, su, v, sv], u < v, s=1 positive literal
+# (satisfied when the variable is 1), s=0 negated.
+
+WORD_BITS is 24
+
+# ---- deterministic instance generation (minstd, as in symplus) ----
+define m2_lcg(state) as:
+    return (state * 48271) % 2147483647
+
+define gen_max2sat(n, m_count, seed) as:
+    local s is seed
+    if s <= 0:
+        s is 1
+    local clauses is []
+    local i is 0
+    loop while i < m_count:
+        s is m2_lcg of s
+        local u is s % n
+        s is m2_lcg of s
+        local v is s % (n - 1)
+        if v >= u:
+            v is v + 1
+        s is m2_lcg of s
+        local su is s % 2
+        s is m2_lcg of s
+        local sv is s % 2
+        if u < v:
+            append of [clauses, [u, su, v, sv]]
+        else:
+            append of [clauses, [v, sv, u, su]]
+        i is i + 1
+    return clauses
+
+# ---- oracle 2: independent full-assignment evaluation ----
+define check_assignment(clauses, bits) as:
+    local sat is 0
+    local ci is 0
+    unobserved:
+        loop while ci < (len of clauses):
+            local cl is clauses[ci]
+            local bu is bit_and of [bit_shr of [bits, cl[0]], 1]
+            local bv is bit_and of [bit_shr of [bits, cl[2]], 1]
+            if bu == cl[1] or bv == cl[3]:
+                sat is sat + 1
+            ci is ci + 1
+    return sat
+
+# ---- oracle 1: brute force over all 2^n assignments ----
+define brute_max2sat(n, clauses) as:
+    local size is bit_shl of [1, n]
+    local best is 0 - 1
+    local x is 0
+    unobserved:
+        loop while x < size:
+            local sat is check_assignment of [clauses, x]
+            if sat > best:
+                best is sat
+            x is x + 1
+    return best
+
+# ---- the split ----
+# Groups: part 0 = vars [0, n0), part 1 = [n0, n0+n1), part 2 = rest.
+define sl_sizes(n) as:
+    local n0 is floor of (n / 3)
+    local n1 is floor of ((n - n0) / 2)
+    return [n0, n1, n - n0 - n1]
+
+define sl_group(v, sizes) as:
+    if v < sizes[0]:
+        return 0
+    if v < sizes[0] + sizes[1]:
+        return 1
+    return 2
+
+define sl_local(v, sizes) as:
+    if v < sizes[0]:
+        return v
+    if v < sizes[0] + sizes[1]:
+        return v - sizes[0]
+    return v - sizes[0] - sizes[1]
+
+# Pair index for a clause: (0,1)->0, (0,2)->1, (1,2)->2. A clause internal
+# to one group goes to the unique pair listed for that group so it is
+# counted exactly once: g0->pair0, g1->pair2, g2->pair1.
+define sl_pair_of(gu, gv) as:
+    if gu == gv:
+        if gu == 0:
+            return 0
+        if gu == 1:
+            return 2
+        return 1
+    if gu + gv == 1:
+        return 0
+    if gu + gv == 2:
+        return 1
+    return 2
+
+# Literal value under a pair's partial assignment (ga/gb are the pair's two
+# group ids; a/b their assignment masks over group-local bit positions).
+define sl_lit_bit(v, sizes, ga, a, gb, b) as:
+    local g is sl_group of [v, sizes]
+    local l is sl_local of [v, sizes]
+    if g == ga:
+        return bit_and of [bit_shr of [a, l], 1]
+    if g == gb:
+        return bit_and of [bit_shr of [b, l], 1]
+    throw of "sl_lit_bit: variable outside its clause's pair"
+
+# ---- build: weight tables + per-value buckets and packed masks ----
+# Returns a state dict. Memory accounting (the cliff) is in
+# state.table_entries: W01 + W02 + W12 = N0*N1 + N0*N2 + N1*N2.
+define sl_build(n, clauses) as:
+    local sizes is sl_sizes of n
+    local N0 is bit_shl of [1, sizes[0]]
+    local N1 is bit_shl of [1, sizes[1]]
+    local N2 is bit_shl of [1, sizes[2]]
+    local m_count is len of clauses
+
+    # split clauses by pair
+    local by_pair is [[], [], []]
+    local ci is 0
+    loop while ci < m_count:
+        local cl is clauses[ci]
+        local gu is sl_group of [cl[0], sizes]
+        local gv is sl_group of [cl[2], sizes]
+        append of [by_pair[sl_pair_of of [gu, gv]], cl]
+        ci is ci + 1
+
+    # pair geometry: pair p spans groups pg[p] = [ga, gb], dims pd[p]
+    local pg is [[0, 1], [0, 2], [1, 2]]
+    local pd is [[N0, N1], [N0, N2], [N1, N2]]
+
+    # fill the three weight tables
+    local tables is []
+    local p is 0
+    unobserved:
+        loop while p < 3:
+            local NA is pd[p][0]
+            local NB is pd[p][1]
+            local ga is pg[p][0]
+            local gb is pg[p][1]
+            local pcls is by_pair[p]
+            local pc is len of pcls
+            local W is int_vector_new of (NA * NB)
+            local a is 0
+            loop while a < NA:
+                local b is 0
+                loop while b < NB:
+                    local w is 0
+                    local k is 0
+                    loop while k < pc:
+                        local cl is pcls[k]
+                        local bu is sl_lit_bit of [cl[0], sizes, ga, a, gb, b]
+                        local bv is sl_lit_bit of [cl[2], sizes, ga, a, gb, b]
+                        if bu == cl[1] or bv == cl[3]:
+                            w is w + 1
+                        k is k + 1
+                    W[a * NB + b] is w
+                    b is b + 1
+                a is a + 1
+            append of [tables, W]
+            p is p + 1
+
+    # per-weight-value structures:
+    #   bucket01[k]  — list of encoded a0*N1+a1 with W01 == k
+    #   maskB[k]     — int_vector N0*WW2, packed a2-rows of (W02 == k)
+    #   maskC[k]     — int_vector N1*WW2, packed a2-rows of (W12 == k)
+    local WW2 is floor of ((N2 + WORD_BITS - 1) / WORD_BITS)
+    local bucket01 is []
+    local maskB is []
+    local maskC is []
+    local vals02 is []
+    local vals12 is []
+    local k is 0
+    loop while k <= m_count:
+        append of [bucket01, null]
+        append of [maskB, null]
+        append of [maskC, null]
+        k is k + 1
+
+    local W01 is tables[0]
+    local a0 is 0
+    unobserved:
+        loop while a0 < N0:
+            local a1 is 0
+            loop while a1 < N1:
+                local w is W01[a0 * N1 + a1]
+                if bucket01[w] == null:
+                    bucket01[w] is []
+                append of [bucket01[w], a0 * N1 + a1]
+                a1 is a1 + 1
+            a0 is a0 + 1
+        local W02 is tables[1]
+        a0 is 0
+        loop while a0 < N0:
+            local a2 is 0
+            loop while a2 < N2:
+                local w is W02[a0 * N2 + a2]
+                if maskB[w] == null:
+                    maskB[w] is int_vector_new of (N0 * WW2)
+                    append of [vals02, w]
+                local idx is a0 * WW2 + (floor of (a2 / WORD_BITS))
+                maskB[w][idx] is bit_or of [maskB[w][idx], bit_shl of [1, a2 % WORD_BITS]]
+                a2 is a2 + 1
+            a0 is a0 + 1
+        local W12 is tables[2]
+        local a1 is 0
+        loop while a1 < N1:
+            local a2 is 0
+            loop while a2 < N2:
+                local w is W12[a1 * N2 + a2]
+                if maskC[w] == null:
+                    maskC[w] is int_vector_new of (N1 * WW2)
+                    append of [vals12, w]
+                local idx is a1 * WW2 + (floor of (a2 / WORD_BITS))
+                maskC[w][idx] is bit_or of [maskC[w][idx], bit_shl of [1, a2 % WORD_BITS]]
+                a2 is a2 + 1
+            a1 is a1 + 1
+
+    return {"n": n, "sizes": sizes, "m": m_count, "N0": N0, "N1": N1, "N2": N2, "WW2": WW2, "tables": tables, "bucket01": bucket01, "maskB": maskB, "maskC": maskC, "vals02": vals02, "vals12": vals12, "table_entries": (N0 * N1) + (N0 * N2) + (N1 * N2), "word_ops": 0}
+
+# ---- search: maximum t with a (k01,k02,k12)-split triangle ----
+# Returns [t, a0, a1, a2] or [-1, 0, 0, 0]. Counts packed-word AND ops in
+# st.word_ops (the "matmul" cost the theory cares about).
+define sl_search(st) as:
+    local m_count is st.m
+    local N1 is st.N1
+    local N2 is st.N2
+    local WW2 is st.WW2
+    local ops is 0
+    local t is m_count
+    unobserved:
+        loop while t >= 0:
+            local i2 is 0
+            loop while i2 < (len of st.vals02):
+                local k02 is st.vals02[i2]
+                local i12 is 0
+                loop while i12 < (len of st.vals12):
+                    local k12 is st.vals12[i12]
+                    local k01 is t - k02 - k12
+                    if k01 >= 0 and k01 <= m_count:
+                        local bkt is st.bucket01[k01]
+                        if bkt != null:
+                            local mB is st.maskB[k02]
+                            local mC is st.maskC[k12]
+                            local bi is 0
+                            loop while bi < (len of bkt):
+                                local enc is bkt[bi]
+                                local a0 is floor of (enc / N1)
+                                local a1 is enc % N1
+                                local w is 0
+                                loop while w < WW2:
+                                    ops is ops + 1
+                                    local hit is bit_and of [mB[a0 * WW2 + w], mC[a1 * WW2 + w]]
+                                    if hit != 0:
+                                        # recover a2: lowest set bit of the word
+                                        local bit is 0
+                                        loop while (bit_and of [bit_shr of [hit, bit], 1]) == 0:
+                                            bit is bit + 1
+                                        st.word_ops is ops
+                                        return [t, a0, a1, (w * WORD_BITS) + bit]
+                                    w is w + 1
+                                bi is bi + 1
+                    i12 is i12 + 1
+                i2 is i2 + 1
+            t is t - 1
+    st.word_ops is ops
+    return [0 - 1, 0, 0, 0]
+
+# ---- decode a triangle into a full assignment ----
+define sl_assignment(st, a0, a1, a2) as:
+    local sizes is st.sizes
+    return bit_or of [a0, bit_or of [bit_shl of [a1, sizes[0]], bit_shl of [a2, sizes[0] + sizes[1]]]]
+
+# ---- top level: build + search + certificate ----
+# Returns {opt, bits, cert, ok, table_entries, word_ops}. ok==1 iff the
+# certificate (independent re-evaluation) equals the claimed optimum.
+define sl_max2sat(n, clauses) as:
+    local st is sl_build of [n, clauses]
+    local r is sl_search of st
+    local bits is sl_assignment of [st, r[1], r[2], r[3]]
+    local cert is check_assignment of [clauses, bits]
+    local ok is 0
+    if cert == r[0]:
+        ok is 1
+    return {"opt": r[0], "bits": bits, "cert": cert, "ok": ok, "table_entries": st.table_entries, "word_ops": st.word_ops}

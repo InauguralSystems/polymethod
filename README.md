@@ -49,6 +49,53 @@ m=400, the engine takes ~3.8s against the oracle's ~54s — the transform's
 m/n advantage showing through, oracle-checked to byte equality on all 2^18
 outputs.
 
+## Rung 2 (done): split-and-list MAX-2-SAT, with the crossover measured
+
+Williams (TCS 348, 2005): split the n variables into three parts, list the
+2^(n/3) partial assignments of each, precompute the three pairwise
+clause-weight tables (the O(2^(2n/3))-memory objects), and find the optimum
+as a maximum-weight triangle over weight splits (k01, k02, k12). The
+triangle inner step uses bit-packed Boolean row masks — the practical
+stand-in for the fast-matrix-multiplication call, which the theory needs
+only existentially.
+
+```bash
+$EIGS tests/test_split_list.eigs             # rung gate: 38 assertions
+$EIGS polymethod.eigs max2sat 12 36 1        # one size, vs brute + certificate
+$EIGS polymethod.eigs max2sat-sweep 1        # the crossover sweep
+```
+
+Two oracles guard every result: brute-force 2^n enumeration (shared-code-free)
+must agree on the optimum, and the winning triangle is decoded into a full
+assignment and re-evaluated clause-by-clause — a **certificate** that must
+equal the claimed optimum. The suite plants a corrupted weight-table entry
+and asserts the certificate catches it.
+
+### The measured artifact
+
+The "beats brute force at n≈45–60" folklore (uncited in the literature —
+see the hq research report) does **not** describe a same-runtime pair. On
+this box (seed 1, m = 3n, single runs — counters are deterministic):
+
+| n | table entries | split-and-list | brute force | ratio |
+|---|---|---|---|---|
+| 9 | 192 | 17 ms | 36 ms | 2.1x |
+| 12 | 768 | 49 ms | 327 ms | 6.7x |
+| 15 | 3,072 | 223 ms | 3.2 s | 14x |
+| 18 | 12,288 | 1.1 s | 30.3 s | 28x |
+| 21 | 49,152 | 4.6 s | 281 s | 61x |
+
+The crossover is **below n=9**, and the ratio doubles every +3 variables —
+the 2^(n/3) separation the theory predicts, with split-and-list wall time
+tracking its 2^(2n/3) table build (×~4.3 per step) and the packed-word
+triangle search contributing almost nothing at these sizes (word_ops ≤
+1,407). The folklore n≈45–60 figure is about optimized-C constants and the
+ω-exponent matmul term, neither of which is in play at demo scale; in a
+constant-factor-fair fight the asymptotics win immediately. Memory is the
+real wall, as predicted: table entries grow ×4 per +3 variables, projecting
+the 4 GB cliff at n ≈ 42 on this box — before wall-clock ever becomes the
+binding constraint.
+
 ### The oracle discipline
 
 - `brute_counts` shares no code with the engine: it evaluates the circuit
@@ -65,8 +112,8 @@ outputs.
 | rung | artifact | status |
 |---|---|---|
 | 1 | SYM∘AND evaluation engine (zeta transform) | **done** |
-| 2 | Split-and-list MAX-2-SAT with a *measured* brute-force crossover | next |
-| 3 | AC0 #SAT via restriction families | planned |
+| 2 | Split-and-list MAX-2-SAT with a *measured* brute-force crossover | **done** |
+| 3 | AC0 #SAT via restriction families | next |
 | 4 | AC0[⊕] deterministic #SAT (derandomized F2 polynomials) | planned |
 | 5 | ACW depth-2 threshold SAT (probabilistic PTFs) | planned |
 | 6 | Toy YBT/Chen–Papakonstantinou conversion, per-stage only | planned |

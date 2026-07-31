@@ -21,12 +21,24 @@ Root EigenScript issues get fixed upstream instead of worked around here.
   n=16/m=4000: 0 mismatches. Shipped in v0.34.0; with the CI pin now at
   v0.34.0 the 1e8-iteration ceiling is LIFTED — oracle runs may exceed 1e8
   cumulative iterations everywhere.
+- **Rung-2 friction (2026-07-31): bitset ops are hand-rolled.** The packed
+  Boolean row masks needed 24-bit word packing (`bit_or`/`bit_shl` per bit),
+  a manual lowest-set-bit loop to recover the witness, and manual `i*N+j`
+  2D indexing over `int_vector`. All workable, none pretty. If a later rung
+  (ACW's probabilistic-PTF matrices, rung 5) leans harder on Boolean linear
+  algebra, the upstream asks crystallize as: a native fixed-width bitset
+  (or `popcount`/`ctz` builtins) and possibly 2D buffer views. Logged as
+  pressure, not yet worth an upstream issue — one more rung of evidence
+  first (the house rule: the data decides).
+- **Rung-2 measured result worth carrying:** same-runtime crossover vs brute
+  force is below n=9 (ratio doubles per +3 vars, = 2^(n/3)); wall time is
+  table-build-dominated (2^(2n/3)), word_ops negligible at demo scale; the
+  4 GB memory cliff projects to n≈42 — memory binds before time does, as
+  the proposal predicted.
 - **Rung-1 build friction was near zero (2026-07-30).** The engine needed
   `bit_and`/`bit_or`/`bit_xor`/`bit_shl` (present as builtins), stdlib
   `lib/int_vector.eigs` buffers for the 2^n count vectors, and `%`. Nothing
-  had to be worked around. The interesting pressure starts at rung 2:
-  split-and-list needs sorting 2^(2n/3)-scale keyed records and a deliberate
-  peak-memory cliff — watch list-of-pairs vs parallel int_vector shapes there.
+  had to be worked around.
 - **Counting range (future).** Numbers are doubles: monomial counts and
   intermediate sums are exact only below 2^53. Fine for every planned rung at
   demo n, but rung 6's exact-monomial-count artifact must check its totals

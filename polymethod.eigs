@@ -1,20 +1,65 @@
 # ============================================================
-# polymethod CLI — run the SYM∘AND engine against its oracle
+# polymethod CLI — run the ladder rungs against their oracles
 # ============================================================
 #
-#   eigenscript polymethod.eigs [n] [m_count] [seed] [k]
+#   eigenscript polymethod.eigs [n] [m_count] [seed] [k]     # rung 1 (default)
+#   eigenscript polymethod.eigs max2sat [n] [m] [seed]       # rung 2, one size
+#   eigenscript polymethod.eigs max2sat-sweep [seed]         # rung 2, n sweep
 #
-# Generates a seeded random SYM∘AND circuit (m_count AND monomials on
-# n variables, threshold-k symmetric output), evaluates it on all 2^n
-# inputs twice — zeta-transform engine vs direct brute force — and
-# reports agreement, the #SAT count, and wall times. Run from the repo
-# root (load paths are cwd-relative).
+# Rung 1 (SYM∘AND): seeded circuit, zeta-transform engine vs direct brute
+# force on all 2^n inputs. Rung 2 (split-and-list MAX-2-SAT): optimum via
+# weight-split triangle search vs 2^n brute force, plus the certificate
+# check; the sweep prints the measured cost curves (the crossover
+# artifact). Run from the repo root (load paths are cwd-relative).
 
 load_file of "lib/int_vector.eigs"
 load_file of "src/symplus.eigs"
+load_file of "src/split_list.eigs"
+
+define run_max2sat(n, m_count, seed, do_brute) as:
+    local clauses is gen_max2sat of [n, m_count, seed]
+    local t0 is clock_unix of null
+    local s is sl_max2sat of [n, clauses]
+    local t1 is clock_unix of null
+    local sl_ms is floor of ((t1 - t0) * 1000)
+    local agree is "skipped"
+    local brute_ms is 0 - 1
+    if do_brute == 1:
+        local b is brute_max2sat of [n, clauses]
+        local t2 is clock_unix of null
+        brute_ms is floor of ((t2 - t1) * 1000)
+        agree is "0"
+        if b == s.opt:
+            agree is "1"
+    print of f"max2sat n={n} m={m_count} seed={seed} opt={s.opt} certified={s.ok} agree={agree} table_entries={s.table_entries} word_ops={s.word_ops} sl_ms={sl_ms} brute_ms={brute_ms}"
+    if s.ok != 1:
+        print of "FAIL: certificate mismatch"
+        exit of 1
+    if do_brute == 1 and agree != "1":
+        print of "FAIL: split-and-list disagrees with brute force"
+        exit of 1
 
 define main() as:
     local argv is args of null
+    if (len of argv) > 0 and argv[0] == "max2sat":
+        local n is 12
+        local m_count is 36
+        local seed is 1
+        if (len of argv) > 1:
+            n is num of argv[1]
+        if (len of argv) > 2:
+            m_count is num of argv[2]
+        if (len of argv) > 3:
+            seed is num of argv[3]
+        run_max2sat of [n, m_count, seed, 1]
+        return 0
+    if (len of argv) > 0 and argv[0] == "max2sat-sweep":
+        local seed is 1
+        if (len of argv) > 1:
+            seed is num of argv[1]
+        for sweep_n in [9, 12, 15, 18, 21]:
+            run_max2sat of [sweep_n, sweep_n * 3, seed, 1]
+        return 0
     local n is 12
     local m_count is 60
     local seed is 1
