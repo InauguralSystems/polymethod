@@ -18,6 +18,7 @@ load_file of "src/split_list.eigs"
 load_file of "src/restriction.eigs"
 load_file of "src/ac0xor.eigs"
 load_file of "src/thr2.eigs"
+load_file of "src/ybt.eigs"
 
 define run_ac0(n, circ, label, do_brute) as:
     local t0 is clock_unix of null
@@ -187,6 +188,30 @@ define main() as:
             print of f"thr2 support n=14 m={m} monomials={sm.monomials} budget=2^7=128 max_coeff={sm.max_coeff} r_groups={sm.r_groups} agree={agree}"
             if agree != "1":
                 print of "FAIL: sweep row disagrees with brute force"
+                exit of 1
+        return 0
+    if (len of argv) > 0 and argv[0] == "ybt-sweep":
+        local seed is 11
+        if (len of argv) > 1:
+            seed is num of argv[1]
+        # (a) OR-approximation error vs t_or on the n=8 toy chain
+        local c8 is gen_ybt_circ of [8, 3, 4, 3, 1]
+        local b8 is brute_ybt of c8
+        for tor in [1, 2, 3]:
+            local r is ybt_convert of [c8, tor, 2, seed]
+            print of f"ybt n=8 t_or={tor} count={r.count} brute={b8} mismatches={r.mismatches} stage_monos={r.gate_monomials}->{r.or_monomials}->{r.sym_monomials} max_coeff={r.max_coeff}"
+        # (b) amplification blowup at n=12: support saturates, PRE-REDUCTION
+        # coefficients explode — the measured bigint axis
+        local c12 is gen_ybt_circ of [12, 4, 5, 3, 1]
+        local b12 is brute_ybt of c12
+        for ta in [1, 2, 3]:
+            local r is ybt_convert of [c12, 3, ta, seed]
+            local agree is "0"
+            if r.count == b12 and r.mismatches == 0:
+                agree is "1"
+            print of f"ybt n=12 t_amp={ta} deg={2 * ta - 1} sym_monos={r.sym_monomials} max_coeff={r.max_coeff} agree={agree}"
+            if agree != "1":
+                print of "FAIL: amplified chain disagrees with brute force"
                 exit of 1
         return 0
     local n is 12

@@ -227,6 +227,42 @@ At tiny sample sizes the rounding bias dominates the concentration
 behavior entirely. The suite asserts only the verified endpoints (exact at
 full sample, errs when undersampled) — monotonicity would be a false test.
 
+## Rung 6 (done): the YBT conversion, per stage, on toy circuits
+
+The ACC0 → SYM∘AND conversion (Yao 1990; Beigel–Tarui 1994) implemented
+stage by stage — never end-to-end, because the hq research pass showed a
+real conversion is ~2^1000 monomials at n=30; the artifact is the **exact
+per-stage bookkeeping of real converted toy circuits**, which no paper
+publishes. Stage A: the Beigel–Tarui modulus amplifier
+F_t(y) = 1 − (1−y)^t Σ_{j<t} C(t−1+j,j) y^j, congruence-tested
+exhaustively (and F_2 comes out as Toda's classic 3y² − 2y³). Stage B:
+MODNZ_p gates as exact multilinear integer polynomials via Fermat
+powering — rung 5's polynomial engine reused verbatim. Stage C: Razborov
+OR over Z_3 (rung 4's construction in its second modulus). Stage D: the
+composed toy chain OR∘MOD₃∘vars → one polynomial → amplified into the
+SYM∘AND form ([value mod 3^t = 1]), evaluated everywhere by the integer
+zeta transform and differentially checked per input.
+
+```bash
+$EIGS tests/test_ybt.eigs          # rung gate: 10 assertions, ~70 ms
+$EIGS polymethod.eigs ybt-sweep    # error + blowup sweeps
+```
+
+### The measured artifacts
+
+Toy chain (n=8, three MOD₃-of-4 gates under an OR): exact at t_or = 2,
+with the full stage ladder counted — 30 gate monomials → 61 after the OR
+layer → 62 in the final SYM∘AND, and the t_or = 1 undersized OR errs on
+exactly 64 of 256 inputs, caught by the differential. At n=12 (m=4, k=5,
+brute-verified 3992/4096): support saturates its touched-variable
+ceiling (929 → 985 monomials as amplifier degree goes 1 → 7) — but
+**pre-reduction integer coefficients explode 2 → 226,209 → 2,937,306**
+across the same sweep. At toy scale the quasi-polynomial blowup lives in
+the coefficients, not the support; this is the measured on-ramp to the
+2^53 double ceiling GAPS.md tracks, and the concrete reason a real-scale
+conversion needs arbitrary-precision integers long before it needs
+memory for monomials.
+
 ## The ladder (from the hq research report, easiest → frontier)
 
 | rung | artifact | status |
@@ -236,7 +272,7 @@ full sample, errs when undersampled) — monotonicity would be a false test.
 | 3 | AC0 #SAT via a restriction tree (savings-vs-fan-in measured) | **done** |
 | 4 | AC0[⊕] #SAT via F2 probabilistic polynomials (error-vs-degree measured) | **done** |
 | 5 | Depth-2 threshold SAT via sampled-threshold PTFs (support-vs-budget measured) | **done** |
-| 6 | Toy YBT/Chen–Papakonstantinou conversion, per-stage only | planned |
+| 6 | Toy YBT conversion, per-stage, exact monomial/coefficient bookkeeping | **done** |
 | 7 | Chen–Tal–Wang estimator chain (the live frontier) | aspiration |
 
 End-to-end ACC0-SAT is deliberately **not** a goal: the conversion is galactic

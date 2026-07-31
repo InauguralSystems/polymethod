@@ -1,0 +1,99 @@
+# ============================================================
+# test_ybt.eigs — rung-6 gate for the per-stage YBT conversion
+# ============================================================
+# Run from the repo root: eigenscript tests/test_ybt.eigs
+# Exits 1 on any failure. Numbers probed before being asserted.
+
+load_file of "lib/int_vector.eigs"
+load_file of "src/thr2.eigs"
+load_file of "src/ybt.eigs"
+
+fails is 0
+passes is 0
+
+define check(label, got, expected) as:
+    if got == expected:
+        passes is passes + 1
+        print of f"  PASS: {label}"
+    else:
+        fails is fails + 1
+        print of f"  FAIL: {label} (got {got}, expected {expected})"
+
+# ---- 1. stage A: amplifier congruences, exhaustive over t, m, y ----
+viol is 0
+for t in [1, 2, 3]:
+    for m in [2, 3, 6]:
+        coeffs is amp_poly of t
+        md is 1
+        i is 0
+        loop while i < t:
+            md is md * m
+            i is i + 1
+        y is 0 - 30
+        loop while y <= 30:
+            fv is amp_eval_mod of [coeffs, y, md]
+            if (((y % m) + m) % m) == 0 and fv != 0:
+                viol is viol + 1
+            if (((y % m) + m) % m) == 1 and fv != 1:
+                viol is viol + 1
+            y is y + 1
+check of ["amplifier: zero congruence violations (t<=3, m in {2,3,6}, |y|<=30)", viol, 0]
+
+# F_2 must be Toda's polynomial 3y^2 - 2y^3
+a2 is amp_poly of 2
+toda is 0
+if a2[0] == 0 and a2[1] == 0 and a2[2] == 3 and a2[3] == 0 - 2:
+    toda is 1
+check of ["amplifier: F_2 = 3y^2 - 2y^3 (Toda)", toda, 1]
+
+# ---- 2. planted fault: corrupt F_2's constant; congruence must break ----
+bad_amp is [1, 0, 3, 0 - 2]
+pf_viol is 0
+y is 0 - 10
+loop while y <= 10:
+    fv is amp_eval_mod of [bad_amp, y, 9]
+    if (((y % 3) + 3) % 3) == 0 and fv != 0:
+        pf_viol is pf_viol + 1
+    y is y + 1
+pf_caught is 0
+if pf_viol > 0:
+    pf_caught is 1
+check of [f"planted fault: corrupted amplifier violates congruence ({pf_viol} times)", pf_caught, 1]
+
+# ---- 3. stage B: MODNZ_3 gate polynomial is exact (k=4, all 256 inputs) ----
+pxp is {"s": 0, "flags": int_vector_new of 256, "coeff": int_vector_new of 256}
+gp is modnz_poly of [pxp, [0, 1, 2, 3], 3]
+gv is t2_eval_all of [8, gp]
+gviol is 0
+x is 0
+loop while x < 256:
+    s is 0
+    for v in [0, 1, 2, 3]:
+        s is s + (bit_and of [bit_shr of [x, v], 1])
+    expected is 0
+    if (s % 3) != 0:
+        expected is 1
+    if (((gv[x] % 3) + 3) % 3) != expected:
+        gviol is gviol + 1
+    x is x + 1
+check of ["MODNZ_3 k=4: exact on all 256 inputs", gviol, 0]
+check of ["MODNZ_3 k=4: 10 monomials (C(4,1)+C(4,2))", len of gp, 10]
+
+# ---- 4. stage D: the composed toy chain, exact at t_or=2 ----
+circ is gen_ybt_circ of [8, 3, 4, 3, 1]
+check of ["toy circuit: brute count = 240", brute_ybt of circ, 240]
+r2 is ybt_convert of [circ, 2, 2, 11]
+check of ["chain t_or=2: count = 240", r2.count, 240]
+check of ["chain t_or=2: zero mismatches", r2.mismatches, 0]
+check of ["chain t_or=2: stage ladder 30 -> 61 -> 62 monomials", r2.gate_monomials * 1000000 + r2.or_monomials * 1000 + r2.sym_monomials, 30061062]
+
+# ---- 5. the differential catches real approximation error (t_or=1) ----
+r1 is ybt_convert of [circ, 1, 2, 11]
+r1_err is 0
+if r1.mismatches > 0:
+    r1_err is 1
+check of [f"chain t_or=1: undersized OR errs and is caught ({r1.mismatches} inputs)", r1_err, 1]
+
+print of f"test_ybt: {passes} passed, {fails} failed"
+if fails > 0:
+    exit of 1

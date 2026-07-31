@@ -1,0 +1,261 @@
+# ============================================================
+# ybt.eigs — toy Yao–Beigel–Tarui conversion, per stage (rung 6)
+# ============================================================
+#
+# The ACC0 -> SYM∘AND conversion (Yao FOCS 1990; Beigel–Tarui 1994;
+# depth reduction improved by Chen–Papakonstantinou 2016), implemented
+# PER STAGE on toy circuits — the hq research pass refuted any
+# end-to-end demo (a real conversion is ~2^1000 monomials at n=30), so
+# each stage carries its own oracle and the artifact is the EXACT
+# monomial/coefficient bookkeeping of real converted toy circuits,
+# which no paper publishes.
+#
+# Stages:
+#   A. Beigel–Tarui modulus amplifier
+#      F_t(y) = 1 − (1−y)^t · Σ_{j<t} C(t−1+j, j) y^j   (degree 2t−1)
+#      y ≡ 0 (mod m) ⇒ F_t(y) ≡ 0 (mod m^t);  y ≡ 1 ⇒ ≡ 1 (mod m^t).
+#   B. MODNZ_p gate (=1 iff Σ inputs ≢ 0 mod p, p prime) as the EXACT
+#      multilinear integer polynomial (Σ x_i)^(p−1), reduced mod p.
+#   C. Razborov OR over Z_p: 1 − ∏_{i<t_or} (1 − R_i^(p−1)), R_i seeded
+#      subset sums of child polynomials (rung 4's construction, odd p).
+#   D. The composed toy chain OR ∘ MODNZ_p ∘ vars -> one polynomial P
+#      (coeffs mod p), then amplified: F_t(P) with coeffs mod p^t — the
+#      SYM∘AND form: monomials are the ANDs, the top symmetric function
+#      is [value mod p^t == 1].
+#
+# Reuses rung 5's integer-polynomial engine: callers load
+# "lib/int_vector.eigs" AND "src/thr2.eigs" (ip_add_scaled / ip_mul /
+# t2_eval_all) before this file. Composition-free as always.
+
+define ybt_lcg(st) as:
+    st.s is (st.s * 48271) % 2147483647
+    return st.s
+
+# ---- stage A: the amplifier, as univariate coefficient list c[0..2t-1] ----
+define amp_poly(t) as:
+    # binomials up to 2t
+    local C is []
+    local r is 0
+    loop while r <= 2 * t:
+        local row is int_vector_new of (2 * t + 1)
+        row[0] is 1
+        local c is 1
+        loop while c <= r:
+            local above is 0
+            if c <= r - 1:
+                above is C[r - 1][c]
+            row[c] is C[r - 1][c - 1] + above
+            c is c + 1
+        append of [C, row]
+        r is r + 1
+    # (1 - y)^t
+    local a is []
+    local i is 0
+    loop while i <= t:
+        local co is C[t][i]
+        if (i % 2) == 1:
+            co is 0 - co
+        append of [a, co]
+        i is i + 1
+    # sum_{j<t} C(t-1+j, j) y^j
+    local b is []
+    local j is 0
+    loop while j < t:
+        append of [b, C[t - 1 + j][j]]
+        j is j + 1
+    # product, then 1 - (a*b)
+    local prod is []
+    i is 0
+    loop while i < (t + t):
+        append of [prod, 0]
+        i is i + 1
+    i is 0
+    loop while i <= t:
+        j is 0
+        loop while j < t:
+            prod[i + j] is prod[i + j] + (a[i] * b[j])
+            j is j + 1
+        i is i + 1
+    local out is []
+    i is 0
+    loop while i < (len of prod):
+        local co is 0 - prod[i]
+        if i == 0:
+            co is 1 - prod[0]
+        append of [out, co]
+        i is i + 1
+    return out
+
+# evaluate a univariate coefficient list at integer y, reduced mod md
+define amp_eval_mod(coeffs, y, md) as:
+    local acc is 0
+    local pw is 1
+    local i is 0
+    loop while i < (len of coeffs):
+        acc is (acc + (((coeffs[i] % md) * pw) % md)) % md
+        pw is (pw * (y % md)) % md
+        i is i + 1
+    return ((acc % md) + md) % md
+
+# ---- coefficient reduction for multilinear polys (value-mod-md safe) ----
+define ip_mod(poly, md) as:
+    local out is []
+    local i is 0
+    loop while i < (len of poly):
+        local c is ((poly[i][1] % md) + md) % md
+        if c != 0:
+            append of [out, [poly[i][0], c]]
+        i is i + 1
+    return out
+
+# ---- stage B: MODNZ_p gate polynomial, exact ----
+# (x_{v1} + ... + x_{vk})^(p-1), multilinear reduction automatic via
+# ip_mul's mask-OR; coefficients reduced mod p.
+define modnz_poly(px, vars, p) as:
+    local lin is []
+    local i is 0
+    loop while i < (len of vars):
+        append of [lin, [bit_shl of [1, vars[i]], 1]]
+        i is i + 1
+    local out is [[0, 1]]
+    local e is 0
+    loop while e < p - 1:
+        out is ip_mul of [px, out, lin]
+        e is e + 1
+    return ip_mod of [out, p]
+
+# ---- stage C: Razborov OR over Z_p on child polynomials ----
+define or_poly_zp(px, kid_polys, t_or, p, st) as:
+    local one is [[0, 1]]
+    local prod is [[0, 1]]
+    local i is 0
+    loop while i < t_or:
+        local r_sum is []
+        local j is 0
+        loop while j < (len of kid_polys):
+            if ((ybt_lcg of st) % 2) == 1:
+                r_sum is ip_add_scaled of [px, r_sum, kid_polys[j], 1]
+            j is j + 1
+        # 1 - r_sum^(p-1)
+        local rp is [[0, 1]]
+        local e is 0
+        loop while e < p - 1:
+            rp is ip_mul of [px, rp, r_sum]
+            e is e + 1
+        prod is ip_mul of [px, prod, ip_mod of [ip_add_scaled of [px, one, rp, 0 - 1], p]]
+        prod is ip_mod of [prod, p]
+        i is i + 1
+    return ip_mod of [ip_add_scaled of [px, one, prod, 0 - 1], p]
+
+# ---- toy circuit: OR of MODNZ_p gates over variable subsets ----
+# {n, p, gates: [[vars...], ...]}  output = OR_a [ Σ_{v in gates[a]} x_v ≢ 0 mod p ]
+define gen_ybt_circ(n, m_count, k, p, seed) as:
+    local st is {"s": seed}
+    if st.s <= 0:
+        st.s is 1
+    local gates is []
+    local i is 0
+    loop while i < m_count:
+        local used is int_vector_new of n
+        local vars is []
+        local j is 0
+        loop while j < k:
+            local v is (ybt_lcg of st) % n
+            if used[v] == 0:
+                used[v] is 1
+                append of [vars, v]
+                j is j + 1
+        append of [gates, vars]
+        i is i + 1
+    return {"n": n, "p": p, "gates": gates}
+
+define brute_ybt_eval(circ, bits) as:
+    local a is 0
+    loop while a < (len of circ.gates):
+        local sum is 0
+        local j is 0
+        loop while j < (len of circ.gates[a]):
+            sum is sum + (bit_and of [bit_shr of [bits, circ.gates[a][j]], 1])
+            j is j + 1
+        if (sum % circ.p) != 0:
+            return 1
+        a is a + 1
+    return 0
+
+define brute_ybt(circ) as:
+    local size is bit_shl of [1, circ.n]
+    local cnt is 0
+    local x is 0
+    unobserved:
+        loop while x < size:
+            cnt is cnt + (brute_ybt_eval of [circ, x])
+            x is x + 1
+    return cnt
+
+# ---- stage D: compose + amplify; per-input differential + counters ----
+# Returns per-stage bookkeeping: gate monomials, OR-stage monomials, the
+# amplified SYM∘AND monomial count, max |coeff| seen pre-reduction, count
+# and mismatches of [F_t(P) mod p^t == 1] vs the brute circuit.
+define ybt_convert(circ, t_or, t_amp, seed) as:
+    local n is circ.n
+    local p is circ.p
+    local size is bit_shl of [1, n]
+    local px is {"s": 0, "flags": int_vector_new of size, "coeff": int_vector_new of size}
+    local st is {"s": seed}
+    if st.s <= 0:
+        st.s is 1
+    # B: gate polynomials
+    local gate_polys is []
+    local gate_monos is 0
+    local a is 0
+    loop while a < (len of circ.gates):
+        local gp is modnz_poly of [px, circ.gates[a], p]
+        gate_monos is gate_monos + (len of gp)
+        append of [gate_polys, gp]
+        a is a + 1
+    # C: OR layer
+    local P is or_poly_zp of [px, gate_polys, t_or, p, st]
+    local or_monos is len of P
+    # D: amplify — F_t(P) with coefficients mod p^t
+    local md is 1
+    local i is 0
+    loop while i < t_amp:
+        md is md * p
+        i is i + 1
+    local amp is amp_poly of t_amp
+    local acc is []
+    local ppow is [[0, 1]]
+    local maxc is 0
+    i is 0
+    loop while i < (len of amp):
+        if amp[i] != 0:
+            acc is ip_add_scaled of [px, acc, ppow, amp[i]]
+        if i < (len of amp) - 1:
+            ppow is ip_mul of [px, ppow, P]
+            local j is 0
+            loop while j < (len of ppow):
+                local c is ppow[j][1]
+                if c < 0:
+                    c is 0 - c
+                if c > maxc:
+                    maxc is c
+                j is j + 1
+            ppow is ip_mod of [ppow, md]
+        i is i + 1
+    local S is ip_mod of [acc, md]
+    # evaluate the SYM∘AND on all inputs: integer zeta, then value mod p^t
+    local v is t2_eval_all of [n, S]
+    local cnt is 0
+    local mism is 0
+    local x is 0
+    unobserved:
+        loop while x < size:
+            local val is ((v[x] % md) + md) % md
+            local pred is 0
+            if val == 1:
+                pred is 1
+            cnt is cnt + pred
+            if pred != (brute_ybt_eval of [circ, x]):
+                mism is mism + 1
+            x is x + 1
+    return {"count": cnt, "mismatches": mism, "gate_monomials": gate_monos, "or_monomials": or_monos, "sym_monomials": len of S, "max_coeff": maxc}
