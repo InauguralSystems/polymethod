@@ -1,0 +1,72 @@
+# ============================================================
+# test_thr2.eigs — rung-5 gate for sampled-threshold depth-2 SAT
+# ============================================================
+# Run from the repo root: eigenscript tests/test_thr2.eigs
+# Exits 1 on any failure. Thresholds probed before being asserted.
+
+load_file of "lib/int_vector.eigs"
+load_file of "src/thr2.eigs"
+
+fails is 0
+passes is 0
+
+define check(label, got, expected) as:
+    if got == expected:
+        passes is passes + 1
+        print of f"  PASS: {label}"
+    else:
+        fails is fails + 1
+        print of f"  FAIL: {label} (got {got}, expected {expected})"
+
+# ---- 1. hand case: MAJ3 (theta=2) — count 4, the classic 4-monomial poly ----
+hand is {"n": 3, "gates": [[2, [0, 1, 2]]], "top_theta": 1}
+hs is t2_single of [hand, 3, 1, 1]
+check of ["hand MAJ3: count = 4", hs.count, 4]
+check of ["hand MAJ3: exact (0 mismatches)", hs.mismatches, 0]
+check of ["hand MAJ3: 4 monomials", hs.monomials, 4]
+check of ["hand MAJ3: 0/1-valued everywhere", hs.not01, 0]
+
+# ---- 2. full-sample builds are provably exact: differential on 3 circuits ----
+for cs in [1, 2, 3]:
+    c is gen_thr2 of [10, 4, 5, cs]
+    b is brute_thr2 of c
+    s is t2_single of [c, 5, 4, 7]
+    check of [f"full-sample n=10 seed={cs}: count equals brute", s.count, b]
+    check of [f"full-sample n=10 seed={cs}: zero mismatches", s.mismatches, 0]
+    check of [f"full-sample n=10 seed={cs}: 0/1-valued", s.not01, 0]
+
+# ---- 3. sampling error: zero at full sample, real when undersampled ----
+c3 is gen_thr2 of [10, 4, 5, 1]
+full_err is 0
+sub_err is 0
+for sd in [1, 2, 3, 4, 5]:
+    full_err is full_err + (t2_single of [c3, 5, 4, sd]).mismatches
+    sub_err is sub_err + (t2_single of [c3, 3, 4, sd]).mismatches
+check of ["full sample: zero error across 5 seeds", full_err, 0]
+sub_has_err is 0
+if sub_err > 0:
+    sub_has_err is 1
+check of [f"s_bot=3 undersampling errs ({sub_err} total across 5 seeds)", sub_has_err, 1]
+
+# ---- 4. planted fault: a corrupted coefficient breaks 0/1-ness, detected ----
+# Adding +1 to the constant monomial shifts every value; the not01 counter
+# (values outside {0,1}) must fire — the invariant check provably gates.
+pfc is gen_thr2 of [10, 4, 5, 2]
+pf_px is {"s": 0, "flags": int_vector_new of 1024, "coeff": int_vector_new of 1024}
+pf_poly is t2_build of [pf_px, pfc, 5, 4, 7]
+pf_bad is ip_add_scaled of [pf_px, pf_poly, [[0, 1]], 1]
+pf_v is t2_eval_all of [10, pf_bad]
+pf_not01 is 0
+x is 0
+loop while x < 1024:
+    if pf_v[x] != 0 and pf_v[x] != 1:
+        pf_not01 is pf_not01 + 1
+    x is x + 1
+pf_caught is 0
+if pf_not01 > 0:
+    pf_caught is 1
+check of [f"planted fault: corrupted constant breaks 0/1-ness ({pf_not01} inputs)", pf_caught, 1]
+
+print of f"test_thr2: {passes} passed, {fails} failed"
+if fails > 0:
+    exit of 1

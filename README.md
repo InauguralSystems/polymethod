@@ -177,6 +177,56 @@ seeds with zero truth-table mismatches. Notable measured detail: F2
 cancellation keeps the composed polynomials tiny at these sizes (max 27
 monomials at t=8) — the degree grows, the support doesn't.
 
+## Rung 5 (done): depth-2 threshold SAT via sampled-threshold PTFs
+
+The baseline member of the Alman–Williams / Alman–Chan–Williams PTF family:
+each MAJ gate is replaced by the *sampled* threshold (s of its k inputs,
+seeded, threshold rescaled) expanded **exactly** as a multilinear integer
+polynomial via the symmetric-function Möbius expansion
+(α_j = Σ_{i≤j} (−1)^{j−i} C(j,i) [i ≥ θ]); the top gate's expansion is
+substituted with the bottom-gate polynomials. The result is one integer
+polynomial, provably 0/1-valued on every input, evaluated on all 2^n
+inputs by the **integer** subset-lattice zeta transform — rung 1's engine
+in its third ring (counts, F2, now Z). At s = k the construction is exact,
+which anchors the differential; ACW's actual n^(1/3)-degree
+Chebyshev-plus-recursion machinery is **not** implemented — this rung
+measures the baseline it improves on.
+
+```bash
+$EIGS tests/test_thr2.eigs           # rung gate: 16 assertions
+$EIGS polymethod.eigs thr2 12 4 5 1  # one circuit, full-sample, vs brute
+$EIGS polymethod.eigs thr2-sweep     # error + support sweeps
+```
+
+### The measured artifacts
+
+**The empirical open from the hq report — does the support stay under the
+2^(n/2) budget ACW's rectangle evaluation needs? — answers NO for the
+baseline**, with numbers (n=14, k=5, full-sample exact builds, every row
+oracle-verified):
+
+| bottom gates m | monomials | budget 2^7 | over budget |
+|---|---|---|---|
+| 4 | 289 | 128 | 2.3x |
+| 6 | 3,838 | 128 | 30x |
+| 8 | 4,780 | 128 | 37x |
+| 12 | 5,851 | 128 | 46x |
+
+Support is governed by circuit size, not n (fixed m=4: ~300 monomials
+flat from n=10 to 16 while the budget grows past it) — and it crosses the
+budget as soon as the circuit has more than a handful of gates. This is
+the quantified reason ACW's low-degree machinery must exist: the naive
+exact expansion cannot ride the 2^(n/2) rectangle. Integer coefficients
+grow too (max 84 at m=12) — the bigint pressure point GAPS.md predicted,
+still comfortably under double precision at demo scale.
+
+**The sampling-error curve is non-monotone** (n=10, k=5, mean of 5 seeds):
+150.4 mismatches at s=3, **228.6 at s=4**, 0 at s=5 — because the rescaled
+threshold ⌈θ·s/k⌉ rounds hardest at s=4 (3-of-4 vs the true 3-of-5).
+At tiny sample sizes the rounding bias dominates the concentration
+behavior entirely. The suite asserts only the verified endpoints (exact at
+full sample, errs when undersampled) — monotonicity would be a false test.
+
 ## The ladder (from the hq research report, easiest → frontier)
 
 | rung | artifact | status |
@@ -185,7 +235,7 @@ monomials at t=8) — the degree grows, the support doesn't.
 | 2 | Split-and-list MAX-2-SAT with a *measured* brute-force crossover | **done** |
 | 3 | AC0 #SAT via a restriction tree (savings-vs-fan-in measured) | **done** |
 | 4 | AC0[⊕] #SAT via F2 probabilistic polynomials (error-vs-degree measured) | **done** |
-| 5 | ACW depth-2 threshold SAT (probabilistic PTFs) | planned |
+| 5 | Depth-2 threshold SAT via sampled-threshold PTFs (support-vs-budget measured) | **done** |
 | 6 | Toy YBT/Chen–Papakonstantinou conversion, per-stage only | planned |
 | 7 | Chen–Tal–Wang estimator chain (the live frontier) | aspiration |
 

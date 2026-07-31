@@ -1,0 +1,300 @@
+# ============================================================
+# thr2.eigs — depth-2 threshold SAT via sampled-threshold PTFs (rung 5)
+# ============================================================
+#
+# The baseline member of the Alman–Williams / Alman–Chan–Williams PTF
+# family, at demo scale: every MAJ gate is replaced by the SAMPLED
+# threshold — draw s of its k inputs (seeded, without replacement),
+# rescale the threshold, and expand the sampled gate EXACTLY as a
+# multilinear integer polynomial (the symmetric-function Möbius
+# expansion: alpha_j = sum_{i<=j} (-1)^(j-i) C(j,i) f(i)). The top gate's
+# expansion is substituted with the bottom-gate polynomials (multilinear
+# extension at 0/1 values is exact), giving ONE integer polynomial that
+# is 0/1-valued on every input and agrees with the circuit wherever the
+# samples vote the same way as the full gates. s = k is provably exact.
+#
+# Honesty note (house rule): ACW's actual construction — Chebyshev +
+# recursive sampling giving ~s^(1/3)-degree PTFs — is NOT implemented.
+# This is the sampling baseline; what is measured is its error/sample
+# tradeoff, the composed monomial support vs 2^(n/2) (the report's
+# empirical open for the ACW evaluation step), integer coefficient
+# growth (the bigint pressure point), and the distinct right-half mask
+# count (the matrix width ACW's rectangle evaluation would need).
+#
+# Evaluation on all 2^n inputs: the INTEGER subset-lattice zeta
+# transform — rung 1's engine in its third ring (counts, F2, now Z).
+#
+# Oracle: brute_thr2 — direct circuit evaluation, no shared code.
+# Composition-free: callers load "lib/int_vector.eigs" first.
+
+define t2_lcg(st) as:
+    st.s is (st.s * 48271) % 2147483647
+    return st.s
+
+# ---- circuit: {n, gates: [[theta, [vars...]], ...], top_theta} ----
+# gate output = [ #(true vars) >= theta ]; circuit = [ #(true gates) >= top_theta ]
+define gen_thr2(n, m_count, k, seed) as:
+    local st is {"s": seed}
+    if st.s <= 0:
+        st.s is 1
+    local gates is []
+    local i is 0
+    loop while i < m_count:
+        local used is int_vector_new of n
+        local vars is []
+        local j is 0
+        loop while j < k:
+            local v is (t2_lcg of st) % n
+            if used[v] == 0:
+                used[v] is 1
+                append of [vars, v]
+                j is j + 1
+        append of [gates, [floor of ((k + 2) / 2), vars]]
+        i is i + 1
+    return {"n": n, "gates": gates, "top_theta": floor of ((m_count + 2) / 2)}
+
+# ---- the oracle ----
+define brute_thr2_eval(circ, bits) as:
+    local live is 0
+    local a is 0
+    loop while a < (len of circ.gates):
+        local g is circ.gates[a]
+        local cnt is 0
+        local j is 0
+        loop while j < (len of g[1]):
+            cnt is cnt + (bit_and of [bit_shr of [bits, g[1][j]], 1])
+            j is j + 1
+        if cnt >= g[0]:
+            live is live + 1
+        a is a + 1
+    local rv is 0
+    if live >= circ.top_theta:
+        rv is 1
+    return rv
+
+define brute_thr2(circ) as:
+    local size is bit_shl of [1, circ.n]
+    local cnt is 0
+    local x is 0
+    unobserved:
+        loop while x < size:
+            cnt is cnt + (brute_thr2_eval of [circ, x])
+            x is x + 1
+    return cnt
+
+# ---- integer multilinear polynomials: list of [mask, coeff] ----
+# Dense scratch (coeff + flags int_vectors of size 2^n) lives in px.
+define ip_collect(px, touched) as:
+    local out is []
+    local i is 0
+    loop while i < (len of touched):
+        local m is touched[i]
+        if px.flags[m] == 1:
+            if px.coeff[m] != 0:
+                append of [out, [m, px.coeff[m]]]
+            px.flags[m] is 0
+            px.coeff[m] is 0
+        i is i + 1
+    return out
+
+define ip_accum(px, touched, m, c) as:
+    if px.flags[m] == 0:
+        px.flags[m] is 1
+        append of [touched, m]
+    px.coeff[m] is px.coeff[m] + c
+
+define ip_add_scaled(px, a, b, sc) as:
+    local touched is []
+    local i is 0
+    loop while i < (len of a):
+        ip_accum of [px, touched, a[i][0], a[i][1]]
+        i is i + 1
+    i is 0
+    loop while i < (len of b):
+        ip_accum of [px, touched, b[i][0], b[i][1] * sc]
+        i is i + 1
+    return ip_collect of [px, touched]
+
+define ip_mul(px, a, b) as:
+    local touched is []
+    local i is 0
+    unobserved:
+        loop while i < (len of a):
+            local j is 0
+            loop while j < (len of b):
+                ip_accum of [px, touched, bit_or of [a[i][0], b[j][0]], a[i][1] * b[j][1]]
+                j is j + 1
+            i is i + 1
+    return ip_collect of [px, touched]
+
+# ---- exact multilinear expansion of a sampled threshold gate ----
+# alpha_j = sum_{i<=j} (-1)^(j-i) C(j,i) [i >= theta]; term per subset T
+# of the sampled item polys: alpha_|T| * prod(T). Items are polynomials
+# (single literals for bottom gates, gate polys for the top), so this one
+# routine serves both levels.
+define sym_threshold_poly(px, item_polys, theta) as:
+    local s_count is len of item_polys
+    # Pascal triangle up to s_count
+    local C is []
+    local r is 0
+    loop while r <= s_count:
+        local row is int_vector_new of (s_count + 1)
+        row[0] is 1
+        local c is 1
+        loop while c <= r:
+            local above is 0
+            if c <= r - 1:
+                above is C[r - 1][c]
+            row[c] is C[r - 1][c - 1] + above
+            c is c + 1
+        append of [C, row]
+        r is r + 1
+    local alpha is int_vector_new of (s_count + 1)
+    local j is 0
+    loop while j <= s_count:
+        local acc is 0
+        local i is theta
+        loop while i <= j:
+            local term is C[j][i]
+            if ((j - i) % 2) == 1:
+                term is 0 - term
+            acc is acc + term
+            i is i + 1
+        alpha[j] is acc
+        j is j + 1
+    # sum over subsets of item_polys
+    local out is []
+    local sub is 0
+    local nsub is bit_shl of [1, s_count]
+    loop while sub < nsub:
+        local sz is 0
+        local b is 0
+        loop while b < s_count:
+            sz is sz + (bit_and of [bit_shr of [sub, b], 1])
+            b is b + 1
+        if alpha[sz] != 0:
+            local prod is [[0, 1]]
+            b is 0
+            loop while b < s_count:
+                if (bit_and of [bit_shr of [sub, b], 1]) == 1:
+                    prod is ip_mul of [px, prod, item_polys[b]]
+                b is b + 1
+            out is ip_add_scaled of [px, out, prod, alpha[sz]]
+        sub is sub + 1
+    return out
+
+# ---- sample s items of a gate (without replacement, seeded) ----
+define t2_sample(st, items, s_count) as:
+    local pool is []
+    local i is 0
+    loop while i < (len of items):
+        append of [pool, items[i]]
+        i is i + 1
+    local picked is []
+    i is 0
+    loop while i < s_count:
+        local idx is (t2_lcg of st) % (len of pool)
+        append of [picked, pool[idx]]
+        pool[idx] is pool[(len of pool) - 1]
+        list_truncate of [pool, (len of pool) - 1]
+        i is i + 1
+    return picked
+
+# ---- build the composed polynomial for one seed ----
+# s_bot / s_top: sample sizes for bottom gates / the top gate. Thresholds
+# rescale as ceil(theta * s / k), pinned to [1, s].
+define t2_build(px, circ, s_bot, s_top, seed) as:
+    local st is {"s": seed}
+    if st.s <= 0:
+        st.s is 1
+    local gate_polys is []
+    local a is 0
+    loop while a < (len of circ.gates):
+        local g is circ.gates[a]
+        local k is len of g[1]
+        local svars is t2_sample of [st, g[1], s_bot]
+        local th is floor of (((g[0] * s_bot) + k - 1) / k)
+        if th < 1:
+            th is 1
+        if th > s_bot:
+            th is s_bot
+        local lits is []
+        local j is 0
+        loop while j < s_bot:
+            append of [lits, [[bit_shl of [1, svars[j]], 1]]]
+            j is j + 1
+        append of [gate_polys, sym_threshold_poly of [px, lits, th]]
+        a is a + 1
+    local m_count is len of gate_polys
+    local sgates is t2_sample of [st, gate_polys, s_top]
+    local tth is floor of (((circ.top_theta * s_top) + m_count - 1) / m_count)
+    if tth < 1:
+        tth is 1
+    if tth > s_top:
+        tth is s_top
+    return sym_threshold_poly of [px, sgates, tth]
+
+# ---- evaluate on all 2^n inputs: INTEGER zeta transform ----
+define t2_eval_all(n, poly) as:
+    local size is bit_shl of [1, n]
+    local v is int_vector_new of size
+    local i is 0
+    unobserved:
+        loop while i < (len of poly):
+            v[poly[i][0]] is v[poly[i][0]] + poly[i][1]
+            i is i + 1
+        local bit is 0
+        loop while bit < n:
+            local step is bit_shl of [1, bit]
+            local x is 0
+            loop while x < size:
+                if (bit_and of [x, step]) != 0:
+                    v[x] is v[x] + v[bit_xor of [x, step]]
+                x is x + 1
+            bit is bit + 1
+    return v
+
+# ---- single-seed run: counts, mismatches, structure counters ----
+# not01 counts values outside {0,1} — MUST be 0 for an uncorrupted build
+# (the polynomial is an exact expansion of a Boolean function).
+define t2_single(circ, s_bot, s_top, seed) as:
+    local n is circ.n
+    local size is bit_shl of [1, n]
+    local px is {"s": 0, "flags": int_vector_new of size, "coeff": int_vector_new of size}
+    local poly is t2_build of [px, circ, s_bot, s_top, seed]
+    local v is t2_eval_all of [n, poly]
+    local cnt is 0
+    local mism is 0
+    local not01 is 0
+    local x is 0
+    unobserved:
+        loop while x < size:
+            local val is v[x]
+            if val != 0 and val != 1:
+                not01 is not01 + 1
+            local pred is 0
+            if val >= 1:
+                pred is 1
+            cnt is cnt + pred
+            if pred != (brute_thr2_eval of [circ, x]):
+                mism is mism + 1
+            x is x + 1
+    # structure counters
+    local maxc is 0
+    local half is floor of (n / 2)
+    local rmask is (bit_shl of [1, n]) - (bit_shl of [1, half])
+    local rflags is int_vector_new of size
+    local rgroups is 0
+    local i is 0
+    loop while i < (len of poly):
+        local c is poly[i][1]
+        if c < 0:
+            c is 0 - c
+        if c > maxc:
+            maxc is c
+        local rm is bit_and of [poly[i][0], rmask]
+        if rflags[rm] == 0:
+            rflags[rm] is 1
+            rgroups is rgroups + 1
+        i is i + 1
+    return {"count": cnt, "mismatches": mism, "not01": not01, "monomials": len of poly, "max_coeff": maxc, "r_groups": rgroups}

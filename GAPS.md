@@ -21,6 +21,13 @@ Root EigenScript issues get fixed upstream instead of worked around here.
   n=16/m=4000: 0 mismatches. Shipped in v0.34.0; with the CI pin now at
   v0.34.0 the 1e8-iteration ceiling is LIFTED — oracle runs may exceed 1e8
   cumulative iterations everywhere.
+- **Rung-5 verdict on the bitset ask (2026-07-31): pressure did NOT repeat.**
+  The threshold rung runs on integer-coefficient polynomial lists and the
+  integer zeta transform — no packed masks anywhere. The native
+  bitset/popcount/ctz ask stays uncrystallized (rung 2 remains its only
+  evidence). Integer coefficient growth is the axis to watch instead:
+  max |coeff| hit 84 at n=14/m=12 (fine); rung 6's exact monomial counts
+  are where the 2^53 double ceiling could actually bite.
 - **Rung-2 friction (2026-07-31): bitset ops are hand-rolled.** The packed
   Boolean row masks needed 24-bit word packing (`bit_or`/`bit_shl` per bit),
   a manual lowest-set-bit loop to recover the witness, and manual `i*N+j`
