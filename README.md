@@ -317,6 +317,23 @@ End-to-end ACC0-SAT is deliberately **not** a goal: the conversion is galactic
 at any demo scale (~2^1000 monomials for a toy circuit). Rungs are tested
 per-stage, against oracles, at sizes where the oracle is affordable.
 
+## Audits
+
+`audits/` holds tool-audit cases in the same discipline as the rungs: the
+correct answer must be verifiable without trusting any authority, and the
+checker must itself be checked.
+
+**`audits/jc_audit.smt2`** — an SMT-LIB2 (QF_NRA) encoding of the July 2026
+Jacobian-conjecture counterexample (Alpöge; degree-7 polynomial map ℂ³→ℂ³
+with constant det DF = −2 and rational collisions, so the constant-Jacobian
+case dies over ℝ and ℂ alike; dimension ≥ 3 only — the plane case remains
+open). The correct answer is **sat**; a tool answering unsat is extrapolating
+global injectivity from a Jacobian hypothesis — the exact inference the
+counterexample kills. `audits/verify_jc.py` (stdlib-only, exact rational
+arithmetic) proves both load-bearing facts mechanically — det DF ≡ −2, and
+the explicit collision F(1,0,2) = F(0,6,−142) = (2,6,0) — and plants a
+nonconstant-Jacobian fault to prove the check gates. It runs in the CI gate.
+
 ## Toolchain
 
 EigenScript is not vendored. Point at a built binary via `EIGENSCRIPT_BIN`
