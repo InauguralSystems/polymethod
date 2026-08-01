@@ -13,7 +13,7 @@ RUN apt-get update \
         build-essential \
         ca-certificates \
         git \
-        python3-minimal \
+        python3 \
  && rm -rf /var/lib/apt/lists/*
 
 # Build + install EigenScript at the pinned tag (binary on PATH, stdlib under
