@@ -19,7 +19,7 @@ Root EigenScript issues get fixed upstream instead of worked around here.
   `72c85e0`): the cap now fires only under an armed sandbox budget, and the
   counter widened to 64-bit. Differential re-run at n=19/m=1000 and
   n=16/m=4000: 0 mismatches. Shipped in v0.34.0; with the CI pin now at
-  v0.34.0 the 1e8-iteration ceiling is LIFTED — oracle runs may exceed 1e8
+  v0.35.1 the 1e8-iteration ceiling is LIFTED — oracle runs may exceed 1e8
   cumulative iterations everywhere.
 - **Rung-5 verdict on the bitset ask (2026-07-31): pressure did NOT repeat.**
   The threshold rung runs on integer-coefficient polynomial lists and the
